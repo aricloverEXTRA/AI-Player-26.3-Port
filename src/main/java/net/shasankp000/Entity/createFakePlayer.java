@@ -46,7 +46,6 @@ import net.shasankp000.AIPlayer;
 
 public class createFakePlayer extends ServerPlayerEntity {
     public static final Logger LOGGER = LoggerFactory.getLogger("ai-player");
-    public Runnable fixStartingPosition = () -> {};
     public boolean isAShadow;
 
 
