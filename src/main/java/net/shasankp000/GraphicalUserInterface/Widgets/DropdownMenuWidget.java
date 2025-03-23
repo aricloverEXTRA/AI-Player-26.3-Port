@@ -30,7 +30,7 @@ public class DropdownMenuWidget extends ClickableWidget {
 
 
     @Override
-    protected void renderWidget(DrawContext context, int mouseX, int mouseY, float delta) {
+    protected void renderButton(DrawContext context, int mouseX, int mouseY, float delta) {
         // Render the main button
         drawCenteredText(context, MinecraftClient.getInstance().textRenderer, getMessage(), this.getX() + this.width / 2, this.getY() + (this.height - 8) / 2, 0xFFFFFF);
 

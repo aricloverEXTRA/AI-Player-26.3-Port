@@ -1,6 +1,6 @@
 package net.shasankp000.Entity;
 
-import carpet.CarpetSettings;
+
 import carpet.fakes.ServerPlayerInterface;
 import carpet.patches.FakeClientConnection;
 import carpet.utils.Messenger;
@@ -14,7 +14,6 @@ import net.minecraft.entity.player.HungerManager;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.network.NetworkSide;
-import net.minecraft.network.packet.c2s.common.SyncedClientOptions;
 import net.minecraft.network.packet.c2s.play.ClientStatusC2SPacket;
 import net.minecraft.network.packet.s2c.play.EntityPositionS2CPacket;
 import net.minecraft.network.packet.s2c.play.EntitySetHeadYawS2CPacket;
@@ -22,7 +21,6 @@ import net.minecraft.network.packet.s2c.play.PlayerListS2CPacket;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.ServerTask;
-import net.minecraft.server.network.ConnectedClientData;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
@@ -53,9 +51,9 @@ public class createFakePlayer extends ServerPlayerEntity {
 
 
     // constructor
-    private createFakePlayer(MinecraftServer server, ServerWorld worldIn, GameProfile profile, SyncedClientOptions cli, boolean shadow) {
+    private createFakePlayer(MinecraftServer server, ServerWorld worldIn, GameProfile profile, boolean shadow) {
 
-        super(server, worldIn, profile, cli);
+        super(server, worldIn, profile);
         isAShadow = shadow;
 
     }
@@ -131,13 +129,13 @@ public class createFakePlayer extends ServerPlayerEntity {
     }
 
     private static void spawnFake(MinecraftServer server, ServerWorld worldIn, GameProfile gameprofile, Vec3d pos, double yaw, double pitch, GameMode gamemode, boolean flying, RegistryKey<World> dimensionId) {
-        createFakePlayer instance = new createFakePlayer(server, worldIn, gameprofile, SyncedClientOptions.createDefault(), false);
+        createFakePlayer instance = new createFakePlayer(server, worldIn, gameprofile, false);
 //        instance.fixStartingPosition = () -> {
 //            instance.refreshPositionAndAngles(pos.x, pos.y, pos.z, (float) yaw, (float) pitch);
 //            System.out.println("Fixed " + instance.getName().getString() + "'s starting position");
 //            server.getPlayerManager().broadcast(Text.literal("Fixed " + instance.getName().getString() + "'s starting position"), true);
 //        };
-        server.getPlayerManager().onPlayerConnect(new FakeClientConnection(NetworkSide.SERVERBOUND), instance, new ConnectedClientData(gameprofile, 0, instance.getClientOptions()));
+        server.getPlayerManager().onPlayerConnect(new FakeClientConnection(NetworkSide.SERVERBOUND), instance);
         instance.teleport(worldIn, pos.x, pos.y, pos.z, (float) yaw, (float) pitch);
         instance.setHealth(20.0F);
         instance.unsetRemoved();
@@ -175,8 +173,8 @@ public class createFakePlayer extends ServerPlayerEntity {
 
     // Code copied over from carpet.
 
-    public static createFakePlayer respawnFake(MinecraftServer server, ServerWorld level, GameProfile profile, SyncedClientOptions cli) {
-        return new createFakePlayer(server, level, profile, cli, false);
+    public static createFakePlayer respawnFake(MinecraftServer server, ServerWorld level, GameProfile profile) {
+        return new createFakePlayer(server, level, profile, false);
     }
 
     public static createFakePlayer createShadow(MinecraftServer server, ServerPlayerEntity player)  {
@@ -184,9 +182,9 @@ public class createFakePlayer extends ServerPlayerEntity {
         player.networkHandler.disconnect(Text.translatable("multiplayer.disconnect.duplicate_login"));
         ServerWorld worldIn = player.getServerWorld();//.getWorld(player.dimension);
         GameProfile gameprofile = player.getGameProfile();
-        createFakePlayer playerShadow = new createFakePlayer(server, worldIn, gameprofile, player.getClientOptions(), true);
+        createFakePlayer playerShadow = new createFakePlayer(server, worldIn, gameprofile, true);
         playerShadow.setSession(player.getSession());
-        server.getPlayerManager().onPlayerConnect(new FakeClientConnection(NetworkSide.SERVERBOUND), playerShadow, new ConnectedClientData(gameprofile, 0, player.getClientOptions()));
+        server.getPlayerManager().onPlayerConnect(new FakeClientConnection(NetworkSide.SERVERBOUND), playerShadow);
 
         playerShadow.setHealth(player.getHealth());
         playerShadow.networkHandler.requestTeleport(player.getX(), player.getY(), player.getZ(), player.getYaw(), player.getPitch());
@@ -276,10 +274,6 @@ public class createFakePlayer extends ServerPlayerEntity {
         return "127.0.0.1";
     }
 
-    @Override
-    public boolean allowsServerListing() {
-        return CarpetSettings.allowListingFakePlayers;
-    }
 
     @Override
     protected void fall(double y, boolean onGround, BlockState state, BlockPos pos) {

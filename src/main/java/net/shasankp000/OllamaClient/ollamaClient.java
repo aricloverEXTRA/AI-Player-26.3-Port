@@ -50,7 +50,7 @@ public class ollamaClient {
 
 
     public static void execute(CommandContext<ServerCommandSource> context) throws CommandSyntaxException {
-        botName = EntityArgumentType.getPlayer(context, "bot").getName().getLiteralString();
+        botName = EntityArgumentType.getPlayer(context, "bot").getName().getString();
 
         System.out.println("Bot name set to: " + botName);
 

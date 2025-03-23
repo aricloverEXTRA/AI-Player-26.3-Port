@@ -672,7 +672,7 @@ public class modCommandRegistry {
         }
 
         else {
-            String botName = bot.getName().getLiteralString();
+            String botName = bot.getName().getString();
 
             BlockPos currentPosition = bot.getBlockPos();
             BlockPos newPosition = currentPosition.add(1, 0, 0); // Move one block forward
@@ -704,7 +704,7 @@ public class modCommandRegistry {
 
         else {
 
-            String botName = bot.getName().getLiteralString();
+            String botName = bot.getName().getString();
 
             ServerCommandSource botSource = bot.getCommandSource().withLevel(2).withSilent().withMaxLevel(4);
             moveForward(server, botSource, botName);
@@ -735,7 +735,7 @@ public class modCommandRegistry {
 
         else {
 
-            String botName = bot.getName().getLiteralString();
+            String botName = bot.getName().getString();
 
             bot.jump();
 
@@ -797,7 +797,7 @@ public class modCommandRegistry {
         }
 
         else {
-            String botName = bot.getName().getLiteralString();
+            String botName = bot.getName().getString();
 
             ServerCommandSource botSource = bot.getCommandSource().withLevel(2).withSilent().withMaxLevel(4);
 
