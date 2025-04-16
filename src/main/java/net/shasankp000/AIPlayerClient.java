@@ -22,4 +22,3 @@ public class AIPlayerClient implements ClientModInitializer {
 
     }
 }
-

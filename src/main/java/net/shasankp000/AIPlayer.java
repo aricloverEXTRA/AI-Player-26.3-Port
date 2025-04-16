@@ -21,7 +21,7 @@ import org.slf4j.LoggerFactory;
 
 public class AIPlayer implements ModInitializer {
 
-    public static final Logger LOGGER = LoggerFactory.getLogger("ai-player");
+	public static final Logger LOGGER = LoggerFactory.getLogger("ai-player");
 	public static final AIPlayerConfig CONFIG = AIPlayerConfig.createAndLoad(); // initialize the config.
 	public static MinecraftServer serverInstance = null; // default for now
 
