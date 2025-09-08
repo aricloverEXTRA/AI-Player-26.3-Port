@@ -158,7 +158,8 @@ public class VectorExtensionHelper {
 
             LOGGER.info("🔍 TAR entry: {} ({} bytes)", name, size);
 
-            if (name.equals(targetFileName) || name.endsWith(targetFileName) || name.contains("vec0")) {
+            // Only extract the exact target file we're looking for
+            if (name.equals(targetFileName) || name.endsWith("/" + targetFileName)) {
                 try (OutputStream out = Files.newOutputStream(outputPath)) {
                     byte[] buffer = new byte[4096];
                     long remaining = size;
