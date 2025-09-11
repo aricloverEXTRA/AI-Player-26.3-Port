@@ -896,7 +896,7 @@ public class modCommandRegistry {
 
             BlockPos currentPosition = bot.getBlockPos();
             BlockPos newPosition = currentPosition.add(1, 0, 0); // Move one block forward
-            bot.teleport(bot.getServerWorld(), newPosition.getX(), newPosition.getY(), newPosition.getZ(), Set.of(), bot.getYaw(), bot.getPitch());
+            bot.teleport(newPosition.getX(), newPosition.getY(), newPosition.getZ());
 
             LOGGER.info("Teleported {} 1 positive block ahead", botName);
 

@@ -29,7 +29,6 @@ import net.minecraft.util.UserCache;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.Vec3d;
 import net.minecraft.world.GameMode;
-import net.minecraft.world.TeleportTarget;
 import net.minecraft.world.World;
 
 import java.io.InputStreamReader;
@@ -189,10 +188,10 @@ public class createFakePlayer extends ServerPlayerEntity {
         shakeOff();
 
         if (reason.getContent() instanceof TranslatableTextContent text && text.getKey().equals("multiplayer.disconnect.duplicate_login")) {
-            this.networkHandler.disconnect(reason);
+            this.networkHandler.onDisconnected(reason);
         } else {
             this.server.send(new ServerTask(this.server.getTicks(), () -> {
-                this.networkHandler.disconnect(reason);
+                this.networkHandler.onDisconnected(reason);
             }));
         }
     }
@@ -255,9 +254,9 @@ public class createFakePlayer extends ServerPlayerEntity {
     }
 
     @Override
-    public Entity teleportTo(TeleportTarget target)
+    public Entity moveToWorld(ServerWorld serverLevel)
     {
-        Entity entity = super.teleportTo(target);
+        super.moveToWorld(serverLevel);
         if (notInAnyWorld) {
             ClientStatusC2SPacket p = new ClientStatusC2SPacket(ClientStatusC2SPacket.Mode.PERFORM_RESPAWN);
             networkHandler.onClientStatus(p);
