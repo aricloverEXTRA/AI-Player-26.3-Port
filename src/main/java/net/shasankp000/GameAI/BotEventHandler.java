@@ -36,7 +36,7 @@ public class BotEventHandler {
     public static final Logger LOGGER = LoggerFactory.getLogger("ai-player");
     private static MinecraftServer server = null;
     public static ServerPlayerEntity bot = null;
-    public static final String qTableDir = LauncherEnvironment.getStorageDirectory("qtable_storage");
+    public static String qTableDir = null; // Lazy initialization to avoid issues with launcher detection
     private static final Object monitorLock = new Object();
     private static boolean isExecuting = false;
     private static final double DEFAULT_RISK_APPETITE = 0.5; // Default value upon respawn
@@ -44,6 +44,17 @@ public class BotEventHandler {
     public static boolean hasRespawned = false; // flag to track if the bot has respawned before or not
     public static int botSpawnCount = 0;
     private static State currentState = null;
+
+    /**
+     * Lazy initialization of qTable directory path to avoid issues with launcher detection.
+     * This method is public and can be used by other classes.
+     */
+    public static String getQTableDir() {
+        if (qTableDir == null) {
+            qTableDir = LauncherEnvironment.getStorageDirectory("qtable_storage");
+        }
+        return qTableDir;
+    }
 
     public BotEventHandler(MinecraftServer server, ServerPlayerEntity bot) {
         BotEventHandler.server = server;
@@ -125,7 +136,7 @@ public class BotEventHandler {
                 State currentState;
 
                 if (hasRespawned && botDied) {
-                    State lastKnownState = QTableStorage.loadLastKnownState(qTableDir + "/lastKnownState.bin");
+                    State lastKnownState = QTableStorage.loadLastKnownState(getQTableDir() + "/lastKnownState.bin");
                     currentState = createInitialState(bot);
                     BotEventHandler.botDied = false;
 
@@ -229,8 +240,8 @@ public class BotEventHandler {
                 qTable.addEntry(currentState, chosenAction, qValue, nextState);
 
 
-                QTableStorage.saveQTable(qTable, qTableDir + "/qtable.bin");
-                QTableStorage.saveEpsilon(rlAgentHook.getEpsilon(), qTableDir + "/epsilon.bin");
+                QTableStorage.saveQTable(qTable, getQTableDir() + "/qtable.bin");
+                QTableStorage.saveEpsilon(rlAgentHook.getEpsilon(), getQTableDir() + "/epsilon.bin");
 
                 BotEventHandler.currentState = nextState;
 
@@ -255,7 +266,7 @@ public class BotEventHandler {
                 State currentState;
 
                 if (hasRespawned && botDied) {
-                    State lastKnownState = QTableStorage.loadLastKnownState(qTableDir + "/lastKnownState.bin");
+                    State lastKnownState = QTableStorage.loadLastKnownState(getQTableDir() + "/lastKnownState.bin");
                     currentState = createInitialState(bot);
                     BotEventHandler.botDied = false;
 
@@ -358,8 +369,8 @@ public class BotEventHandler {
                 qTable.addEntry(currentState, chosenAction, qValue, nextState);
 
 
-                QTableStorage.saveQTable(qTable, qTableDir + "/qtable.bin");
-                QTableStorage.saveEpsilon(rlAgentHook.getEpsilon(), qTableDir + "/epsilon.bin");
+                QTableStorage.saveQTable(qTable, getQTableDir() + "/qtable.bin");
+                QTableStorage.saveEpsilon(rlAgentHook.getEpsilon(), getQTableDir() + "/epsilon.bin");
 
                 BotEventHandler.currentState = nextState;
             }

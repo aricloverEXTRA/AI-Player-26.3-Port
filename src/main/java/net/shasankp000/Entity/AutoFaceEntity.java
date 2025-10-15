@@ -93,7 +93,7 @@ public class AutoFaceEntity {
 
             try {
 
-                double epsilon = QTableStorage.loadEpsilon(BotEventHandler.qTableDir + "/epsilon.bin");
+                double epsilon = QTableStorage.loadEpsilon(BotEventHandler.getQTableDir() + "/epsilon.bin");
 
                 rlAgent = new RLAgent(epsilon, qTable);
 

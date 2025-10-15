@@ -142,7 +142,7 @@ public class AIPlayer implements ModInitializer {
 
 					if(serverPlayer.getName().getString().equals(BotEventHandler.bot.getName().getString())) {
 
-						QTableStorage.saveLastKnownState(BotEventHandler.getCurrentState(), BotEventHandler.qTableDir + "/lastKnownState.bin");
+						QTableStorage.saveLastKnownState(BotEventHandler.getCurrentState(), BotEventHandler.getQTableDir() + "/lastKnownState.bin");
 
 						BotEventHandler.botDied = true; // set flag for bot's death.
 //						System.out.println("Set botDied flag to true");
