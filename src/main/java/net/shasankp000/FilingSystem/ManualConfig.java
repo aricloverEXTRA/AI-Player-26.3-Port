@@ -28,8 +28,8 @@ public class ManualConfig {
     private static final Logger LOGGER = LoggerFactory.getLogger("ManualConfig");
     private static final String FILE_NAME = "settings.json5";
 
-    // Use a static method to get the correct, dynamically-resolved file path
-    private static final String FILE_PATH = getFilePath();
+    // Lazy initialization to avoid issues with launcher detection during static initialization
+    private static String filePath = null;
 
     // --- Configuration fields (same as before) ---
     private List<String> modelList = new ArrayList<>();
@@ -54,10 +54,14 @@ public class ManualConfig {
 
     /**
      * Helper method to get the correct file path using the LauncherEnvironment class.
+     * Uses lazy initialization to avoid issues with launcher detection during static initialization.
      * @return The absolute path to the settings file.
      */
     private static String getFilePath() {
-        return LauncherEnvironment.getStorageDirectory("config") + File.separator + FILE_NAME;
+        if (filePath == null) {
+            filePath = LauncherEnvironment.getStorageDirectory("config") + File.separator + FILE_NAME;
+        }
+        return filePath;
     }
 
     /**
@@ -162,7 +166,7 @@ public class ManualConfig {
      */
     public void save() {
         Gson gson = new GsonBuilder().setPrettyPrinting().create();
-        try (FileWriter writer = new FileWriter(FILE_PATH)) {
+        try (FileWriter writer = new FileWriter(getFilePath())) {
             gson.toJson(this, writer);
         } catch (IOException e) {
             LOGGER.error("Failed to save config file: {}", e.getMessage());
@@ -176,7 +180,7 @@ public class ManualConfig {
      * @return A loaded ManualConfig instance, or a new one if the file is not found.
      */
     public static ManualConfig load() {
-        File file = new File(FILE_PATH);
+        File file = new File(getFilePath());
         // Ensure the directory for the file exists before attempting to write.
         if (!file.getParentFile().exists()) {
             file.getParentFile().mkdirs();

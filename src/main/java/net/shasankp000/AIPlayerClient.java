@@ -32,15 +32,27 @@ import java.util.UUID;
 
 public class AIPlayerClient implements ClientModInitializer {
     private static final Gson GSON = new Gson();
-    private static final Path BOT_PROFILE_PATH = Paths.get(LauncherEnvironment.getStorageDirectory("config") + File.separator + "settings.json5");
+    private static Path botProfilePath = null;
     private static JsonObject botProfiles;
     public static final Logger LOGGER = LoggerFactory.getLogger("ai-player-client");
     public static final ManualConfig CONFIG = ManualConfig.load();
 
+    /**
+     * Lazy initialization of bot profile path to avoid issues with launcher detection
+     */
+    private static Path getBotProfilePath() {
+        if (botProfilePath == null) {
+            botProfilePath = Paths.get(LauncherEnvironment.getStorageDirectory("config") + File.separator + "settings.json5");
+        }
+        return botProfilePath;
+    }
 
-    static {
+    /**
+     * Load bot profiles from file, called during initialization
+     */
+    private static void loadBotProfiles() {
         try {
-            botProfiles = GSON.fromJson(Files.newBufferedReader(BOT_PROFILE_PATH), JsonObject.class);
+            botProfiles = GSON.fromJson(Files.newBufferedReader(getBotProfilePath()), JsonObject.class);
         } catch (IOException e) {
             System.out.println("Bot profiles not found yet — continuing with no bots registered.");
             botProfiles = null; // Explicitly fallback to safe null
@@ -100,7 +112,8 @@ public class AIPlayerClient implements ClientModInitializer {
 
     @Override
     public void onInitializeClient() {
-
+        // Load bot profiles after launcher detection is available
+        loadBotProfiles();
 
         LOGGER.debug("Running on environment type: {}", FabricLoader.getInstance().getEnvironmentType());
 
