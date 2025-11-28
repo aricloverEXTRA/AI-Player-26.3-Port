@@ -4,6 +4,8 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import net.shasankp000.AIPlayer;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.nio.file.*;
@@ -11,6 +13,7 @@ import java.nio.charset.StandardCharsets;
 
 public class AISearchConfig {
 
+    private static final Logger LOGGER = LoggerFactory.getLogger("ai-search-config");
     public static String GEMINI_API_KEY = "";
     public static String SERPER_API_KEY = "";
     public static String PREFERRED_PROVIDER = "gemini";
@@ -61,12 +64,12 @@ public class AISearchConfig {
                         mapper.writerWithDefaultPrettyPrinter().writeValueAsString(root),
                         StandardCharsets.UTF_8
                 );
-                System.out.println("✅ Created default ai_search_config.json in config folder.");
+                LOGGER.info("✅ Created default ai_search_config.json in config folder.");
             } else {
-                System.out.println("ℹ️ ai_search_config.json already exists, no setup needed.");
+                LOGGER.info("ℹ️ ai_search_config.json already exists, no setup needed.");
             }
         } catch (IOException e) {
-            System.err.println("❌ Failed to create AI Search config: " + e.getMessage());
+            LOGGER.error("❌ Failed to create AI Search config: {}", e.getMessage());
         }
     }
 }
