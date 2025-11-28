@@ -16,6 +16,7 @@ public class StateActions {
         STOP_SPRINTING,
         USE_ITEM,
         ATTACK,
+        SHOOT_ARROW,
         EQUIP_ARMOR,
         HOTBAR_1,
         HOTBAR_2,
@@ -26,6 +27,7 @@ public class StateActions {
         HOTBAR_7,
         HOTBAR_8,
         HOTBAR_9,
+        EVADE, // Adaptive evasion from threats - uses smart movement and pathfinding
     }
 
 }

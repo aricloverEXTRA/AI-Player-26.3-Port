@@ -3,7 +3,6 @@ package net.shasankp000.FilingSystem;
 import com.google.gson.Gson;
 import com.google.gson.GsonBuilder;
 import com.google.gson.reflect.TypeToken;
-import net.shasankp000.Exception.ollamaNotReachableException;
 import net.shasankp000.ServiceLLMClients.*;
 import net.shasankp000.LauncherDetection.LauncherEnvironment;
 
@@ -74,18 +73,19 @@ public class ManualConfig {
 
                 switch (llmMode) {
                     case "ollama":
-                        try {
-                            LOGGER.info("Using ollama");
-                            fetchedModels = getLanguageModels.get();
-                            this.modelList = fetchedModels;
-                            LOGGER.info("Fetched models: {}", this.modelList);
-                            this.save();
-                            return;
-                        } catch (ollamaNotReachableException e) {
-                            LOGGER.error("Ollama is not reachable: {}", e.getMessage());
-                            fetchedModels.add("Ollama is not reachable!");
+                        LOGGER.info("Using ollama");
+                        fetchedModels = getLanguageModels.get();
+
+                        if (fetchedModels.isEmpty()) {
+                            LOGGER.warn("⚠ No models found. Ollama server may not be running.");
+                            fetchedModels.add("Ollama is not reachable! Please start Ollama server.");
+                        } else {
+                            LOGGER.info("Fetched {} models: {}", fetchedModels.size(), this.modelList);
                         }
-                        break;
+
+                        this.modelList = fetchedModels;
+                        this.save();
+                        return;
                     case "openai":
                         modelFetcher = new OpenAIModelFetcher();
                         apiKey = this.openAIKey;

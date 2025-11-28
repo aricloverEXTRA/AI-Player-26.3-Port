@@ -3,9 +3,12 @@ package net.shasankp000.Entity;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.mob.HostileEntity;
+import net.minecraft.entity.mob.SlimeEntity;
+import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.math.Box;
+import net.minecraft.util.math.Vec3d;
 import net.shasankp000.ChatUtils.ChatUtils;
 import net.shasankp000.Database.QTable;
 import net.shasankp000.GameAI.BotEventHandler;
@@ -14,6 +17,8 @@ import net.shasankp000.Commands.modCommandRegistry;
 import net.shasankp000.Database.QTableStorage;
 import net.shasankp000.PlayerUtils.BlockDistanceLimitedSearch;
 import net.shasankp000.PlayerUtils.blockDetectionUnit;
+import net.shasankp000.PlayerUtils.ProjectileDefenseUtils;
+import net.shasankp000.PlayerUtils.PredictiveThreatDetector;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import net.shasankp000.DangerZoneDetector.DangerZoneDetector;
@@ -31,9 +36,10 @@ import java.util.concurrent.TimeUnit;
 
 public class AutoFaceEntity {
 
-    public static final Logger LOGGER = LoggerFactory.getLogger("ai-player");
-    private static final double BOUNDING_BOX_SIZE = 10.0; // Detection range in blocks
-    private static final int INTERVAL_SECONDS = 1; // Interval in seconds to check for nearby entities
+    public static final Logger LOGGER = LoggerFactory.getLogger("AutoFaceEntity");
+    private static final double BOUNDING_BOX_SIZE = 32.0; // Detection range in blocks (increased for better combat awareness)
+    private static final int INTERVAL_SECONDS = 1; // Interval in seconds to check for nearby entities (for entity detection)
+    private static final int PROJECTILE_CHECK_INTERVAL_MS = 50; // Check projectiles every 50ms (1 game tick) - fast enough for arrows
     private static final ExecutorService executor3 = Executors.newSingleThreadExecutor();
     public static boolean botBusy;
     private static boolean botExecutingTask;
@@ -47,6 +53,29 @@ public class AutoFaceEntity {
     private static final Map<ServerPlayerEntity, ScheduledExecutorService> botExecutors = new HashMap<>();
     private static ServerPlayerEntity Bot = null;
     public static boolean isBotMoving = false;
+    public static boolean isShooting = false; // Flag to pause autoface during shooting
+    private static Entity shootingTarget = null; // The entity being shot at (priority target)
+    private static long shootingStartTime = 0; // When shooting started
+
+    // Projectile defense tracking
+    public static boolean isDefendingFromProjectile = false; // Flag when bot is actively defending
+    public static ProjectileDefenseUtils.IncomingProjectile currentThreat = null; // Current projectile being defended against
+    public static String defenseMode = "none"; // "block", "dodge", or "none"
+    private static boolean dodgeExecuted = false; // Flag to prevent multiple dodge commands for same threat
+
+    // Predictive threat tracking (PHASE-BASED DETECTION)
+    public static PredictiveThreatDetector.DrawingBowThreat predictedThreat = null; // Entity drawing bow
+    public static Vec3d plannedEvasiveDirection = null; // Pre-calculated dodge direction
+    public static boolean isWaitingForRelease = false; // Waiting for arrow to be fired
+    public static long threatDetectionTime = 0; // When we first detected the threat
+
+    // Persistent shield blocking state
+    public static boolean isActivelyBlocking = false; // Is bot currently blocking with shield
+    public static net.minecraft.entity.LivingEntity blockingAgainst = null; // Entity we're blocking against
+    public static long blockingStartTime = 0; // When blocking started
+
+    // Flag to prevent chat spam for "terminating all tasks" message
+    private static boolean threatMessageSent = false; // Set to true when message sent, reset when out of danger
 
     public static void setBotExecutingTask(boolean value) {
         botExecutingTask = value;
@@ -58,6 +87,7 @@ public class AutoFaceEntity {
 
     public static void startAutoFace(ServerPlayerEntity bot) {
         // Stop any existing executor for this bot
+        LOGGER.info("========== STARTING AUTOFACE FOR BOT: {} ==========", bot.getName().getString());
 
         Bot = bot;
 
@@ -109,6 +139,7 @@ public class AutoFaceEntity {
 
 
         RLAgent finalRlAgent = rlAgent;
+        LOGGER.info("Scheduling AutoFace task to run every 33ms (30 FPS) for bot: {}", bot.getName().getString());
         botExecutor.scheduleAtFixedRate(() -> {
             // Run detection and facing logic
 
@@ -116,13 +147,64 @@ public class AutoFaceEntity {
 
             if (server != null && server.isRunning() && bot.isAlive()) {
 
+                // ===== PRIORITY: UPDATE EVASION STATUS =====
+                // Check if bot should continue evading or stop (distance-based)
+                updateEvasionStatus(bot, server);
+
+                // If actively evading, skip most other logic
+                if (isEvading) {
+                    return; // Evasion takes priority
+                }
+
+                // ===== PRIORITY: UPDATE PERSISTENT SHIELD BLOCKING =====
+                // This runs first to maintain shield block and face attacker if blocking is active
+                updatePersistentBlocking(bot, server);
+
+                // If actively blocking, skip all other logic - just maintain the block
+                if (isActivelyBlocking) {
+                    return; // Shield blocking takes absolute priority
+                }
+
                 // Detect all entities within the bounding box
                 List<Entity> nearbyEntities = detectNearbyEntities(bot, BOUNDING_BOX_SIZE);
 
-                // Filter only hostile entities
+                // Filter hostile entities (mobs AND hostile players)
+                // CRITICAL: Exclude ALL projectile entities to prevent bot from facing arrows/stuck projectiles!
                  hostileEntities = nearbyEntities.stream()
-                        .filter(entity -> entity instanceof HostileEntity)
+                        .filter(entity -> {
+                            // Include hostile mobs (including SlimeEntity which is also a HostileEntity subclass)
+                            if (entity instanceof HostileEntity || entity instanceof SlimeEntity) {
+                                return true;
+                            }
+                            // Include hostile players (tracked by retaliation system)
+                            if (entity instanceof PlayerEntity player &&
+                                !player.getUuid().equals(bot.getUuid())) { // Don't target self
+                                boolean isHostile = net.shasankp000.PlayerUtils.PlayerRetaliationTracker.isPlayerHostile(bot, player);
+                                if (isHostile) {
+                                    double distance = Math.sqrt(player.squaredDistanceTo(bot));
+                                    LOGGER.info("⚔ Hostile player detected: {} at {}m",
+                                        player.getName().getString(), String.format("%.1f", distance));
+                                }
+                                return isHostile;
+                            }
+                            return false;
+                        })
+                        .filter(entity -> !(entity instanceof net.minecraft.entity.projectile.ProjectileEntity))
+                        .filter(entity -> !(entity instanceof net.minecraft.entity.projectile.PersistentProjectileEntity))
+                        .filter(entity -> !(entity instanceof net.minecraft.entity.projectile.ArrowEntity))
+                        // Also exclude very close entities that might be stuck projectiles
+                        .filter(entity -> {
+                            double distanceToBot = Math.sqrt(entity.squaredDistanceTo(bot));
+                            Vec3d entityVel = entity.getVelocity();
+                            double speed = entityVel.length();
+                            // If entity is within 0.5 blocks AND has zero velocity, likely stuck projectile
+                            return !(distanceToBot < 0.5 && speed < 0.01);
+                        })
                         .toList();
+
+                // ===== PREDICTIVE THREAT DETECTION REMOVED =====
+                // All combat decisions now handled by RL agent in BotEventHandler
+                // This prevents conflicts and lets the agent learn optimal strategies
 
                 boolean hasSculkNearby = false;
 
@@ -134,10 +216,87 @@ public class AutoFaceEntity {
                         .anyMatch(block -> block.contains("Sculk Sensor") || block.contains("Sculk Shrieker"));
 
 
+                // ===== PRIORITY: PROJECTILE DEFENSE =====
+                // If defending from projectile, face it for blocking (highest priority)
+                if (isDefendingFromProjectile && currentThreat != null) {
+                    if ("block".equals(defenseMode)) {
+                        // Face the projectile to block it with shield
+                        FaceClosestEntity.faceProjectile(bot, currentThreat.projectile);
+                        return; // Skip all other facing logic
+                    } else if ("dodge".equals(defenseMode) && !dodgeExecuted) {
+                        // Execute dodge ONCE per threat - immediately!
+                        dodgeExecuted = true; // Mark as executed
+
+                        // Calculate and face dodge direction
+                        Vec3d dodgeDir = ProjectileDefenseUtils.calculateDodgeDirection(bot, currentThreat);
+                        if (dodgeDir != null) {
+                            // Face dodge direction IMMEDIATELY
+                            double yaw = Math.toDegrees(Math.atan2(dodgeDir.z, dodgeDir.x)) - 90;
+                            bot.setYaw((float) yaw);
+
+                            LOGGER.info("⚡ DODGE! {} at {:.1f}m - Moving perpendicular!",
+                                currentThreat.projectileType, currentThreat.distance);
+
+                            // SPRINT for faster dodge (2x speed)
+                            server.getCommandManager().executeWithPrefix(bot.getCommandSource().withSilent().withMaxLevel(4),
+                                "/player " + bot.getName().getString() + " sprint");
+
+                            // Schedule stop after 400ms (sprint moves ~3 blocks in this time)
+                            executor3.submit(() -> {
+                                try {
+                                    Thread.sleep(400); // 400ms sprint = ~3 block dodge
+                                    server.getCommandManager().executeWithPrefix(bot.getCommandSource().withSilent().withMaxLevel(4),
+                                        "/player " + bot.getName().getString() + " stop");
+                                } catch (InterruptedException e) {
+                                    Thread.currentThread().interrupt();
+                                }
+                            });
+                        }
+                    }
+                }
+                // ===== END PRIORITY: PROJECTILE DEFENSE =====
+
                 if (!hostileEntities.isEmpty()) {
                     botBusy = true;
 
-                    System.out.println("Hostile entity detected!");
+                    // Report all hostile entities to debug manager
+                    if (net.shasankp000.Overlay.ThreatDebugManager.isDebugEnabled()) {
+                        net.shasankp000.Overlay.ThreatDebugManager.setBotPlayer(bot);
+                        for (Entity hostileEntity : hostileEntities) {
+                            double dist = Math.sqrt(hostileEntity.squaredDistanceTo(bot.getPos()));
+                            double threat;
+
+                            // Use player-specific threat calculation for hostile players
+                            if (hostileEntity instanceof PlayerEntity player) {
+                                threat = net.shasankp000.PlayerUtils.PlayerRetaliationTracker.getPlayerThreatLevel(bot, player);
+                            } else {
+                                // Calculate basic threat for mobs (simplified version)
+                                threat = 25.0 / Math.max(dist, 1.0);
+                            }
+
+                            net.shasankp000.Overlay.ThreatDebugManager.updateThreat(
+                                hostileEntity.getUuid(),
+                                hostileEntity.getName().getString(),
+                                threat,
+                                dist,
+                                hostileEntity instanceof PlayerEntity ? "Hostile Player" : "Detected"
+                            );
+                        }
+                    }
+
+                    // If bot is shooting at a specific target, lock onto that target only
+                    if (isShooting && isShootingTargetValid()) {
+                        System.out.println("Bot is shooting at priority target: " + shootingTarget.getName().getString());
+                        // Face only the shooting target, ignore other entities
+                        FaceClosestEntity.faceClosestEntity(bot, List.of(shootingTarget));
+                        return;
+                    }
+
+                    // If we were shooting but target is no longer valid, clear it
+                    if (isShooting && !isShootingTargetValid()) {
+                        System.out.println("Shooting target no longer valid, resuming normal autoface");
+                        clearShootingTarget();
+                    }
 
                     // Find the closest hostile entity
                     Entity closestHostile = hostileEntities.stream()
@@ -146,14 +305,28 @@ public class AutoFaceEntity {
 
                     double distanceToHostileEntity = Math.sqrt(closestHostile.squaredDistanceTo(bot.getPos()));
 
-                    if ((PathTracer.BotSegmentManager.getBotMovementStatus() || isBotMoving) || blockDetectionUnit.getBlockDetectionStatus() || isBotExecutingTask()) {
-                        System.out.println("Bot is busy, skipping facing the closest entity");
+                    // Mark closest as current target in debug manager
+                    if (net.shasankp000.Overlay.ThreatDebugManager.isDebugEnabled()) {
+                        net.shasankp000.Overlay.ThreatDebugManager.setCurrentTarget(closestHostile.getUuid());
+                        // Update status to "Targeting"
+                        double threat = 25.0 / Math.max(distanceToHostileEntity, 1.0);
+                        net.shasankp000.Overlay.ThreatDebugManager.updateThreat(
+                            closestHostile.getUuid(),
+                            closestHostile.getName().getString(),
+                            threat,
+                            distanceToHostileEntity,
+                            "Targeting"
+                        );
+                    }
 
-                        if (distanceToHostileEntity <= 10.0) {
+                    if ((PathTracer.BotSegmentManager.getBotMovementStatus() || isBotMoving) || blockDetectionUnit.getBlockDetectionStatus() || isBotExecutingTask()) {
+
+                        System.out.println("Hostile mobs detected while bot is executing jobs!");
+
+
+                        if (distanceToHostileEntity <= 32.0) {
                             isBotMoving = false;
                             setBotExecutingTask(false);
-                            ChatUtils.sendChatMessages(bot.getCommandSource().withSilent().withMaxLevel(4), "Terminating all current tasks due to threat detections");
-
 
                             FaceClosestEntity.faceClosestEntity(bot, AutoFaceEntity.hostileEntities);
 
@@ -180,8 +353,10 @@ public class AutoFaceEntity {
 
                                     try {
                                         eventHandler.detectAndReact(finalRlAgent, distanceToHostileEntity, qTable);
+                                        isHandlerTriggered = false; // Reset after handling
                                     } catch (IOException e) {
                                         System.out.println("Exception occurred in startAutoFace: " + e.getMessage());
+                                        isHandlerTriggered = false; // Reset even on exception
                                         throw new RuntimeException(e);
 
                                     }
@@ -189,6 +364,7 @@ public class AutoFaceEntity {
                                 else {
 
                                     eventHandler.detectAndReactPlayMode(finalRlAgent, qTable);
+                                    isHandlerTriggered = false; // Reset after handling
 
                                 }
 
@@ -196,7 +372,67 @@ public class AutoFaceEntity {
                         }
 
                     }
+                    else {
+                        // this block is crucial, since the training would never trigger previously if the bot was not doing any task!
 
+                        if (distanceToHostileEntity <= 32.0) {
+                            isBotMoving = false;
+                            setBotExecutingTask(false);
+
+                            // Send message only once per threat encounter
+                            if (!threatMessageSent) {
+                                System.out.println("Hostile mobs detected while bot is idle!");
+                                ChatUtils.sendChatMessages(bot.getCommandSource().withSilent().withMaxLevel(4), "Terminating all current tasks due to threat detections");
+                                threatMessageSent = true;
+                            }
+
+
+                            FaceClosestEntity.faceClosestEntity(bot, AutoFaceEntity.hostileEntities);
+
+
+
+                            // Log details of the detected hostile entity (only once)
+                            if (!isHandlerTriggered) {
+                                System.out.println("Closest hostile entity: " + closestHostile.getName().getString()
+                                        + " at distance: " + distanceToHostileEntity);
+                            }
+
+                            botBusy = true; // Set the bot as busy if hostile entities are in range
+                            hostileEntityInFront = true;
+
+                            // Trigger the handler ONLY ONCE
+                            if (isHandlerTriggered) {
+                                // Handler already running for this threat, skip to avoid infinite loop
+                                return;
+                            } else {
+                                System.out.println("Triggering handler for hostile entity.");
+                                isHandlerTriggered = true;
+
+                                BotEventHandler eventHandler = new BotEventHandler(server, bot);
+
+                                if (modCommandRegistry.isTrainingMode) {
+
+                                    try {
+                                        eventHandler.detectAndReact(finalRlAgent, distanceToHostileEntity, qTable);
+                                        isHandlerTriggered = false; // Reset after handling
+                                    } catch (IOException e) {
+                                        System.out.println("Exception occurred in startAutoFace: " + e.getMessage());
+                                        isHandlerTriggered = false; // Reset even on exception
+                                        throw new RuntimeException(e);
+
+                                    }
+                                }
+                                else {
+
+                                    eventHandler.detectAndReactPlayMode(finalRlAgent, qTable);
+                                    isHandlerTriggered = false; // Reset after handling
+
+                                }
+
+                            }
+                        }
+
+                    }
 
                 }
                 else if ((DangerZoneDetector.detectDangerZone(bot, 10, 10 , 10) <= 5 && DangerZoneDetector.detectDangerZone(bot, 10, 10 , 10)!= 0) || hasSculkNearby)  {
@@ -235,8 +471,26 @@ public class AutoFaceEntity {
                     // the hope is that the bot will stop moving ahead of time since the danger zone detector has a wide range.
 
                     if (PathTracer.BotSegmentManager.getBotMovementStatus() || isBotMoving || isBotExecutingTask()) {
+
                         System.out.println("Stopping movement since danger zone is detected.");
-                        ChatUtils.sendChatMessages(bot.getCommandSource().withSilent().withMaxLevel(4), "Terminating all current tasks due to threat detections");
+
+                        // Send message only once per threat encounter
+                        if (!threatMessageSent) {
+                            ChatUtils.sendChatMessages(bot.getCommandSource().withSilent().withMaxLevel(4), "Terminating all current tasks due to threat detections");
+                            threatMessageSent = true;
+                        }
+                        server.getCommandManager().executeWithPrefix(bot.getCommandSource().withSilent().withMaxLevel(4), "/player " + bot.getName().getString() + " stop");
+                    }
+                    else {
+                        // Stop movement regardless of whether the bot is executing a goal or not.
+
+                        System.out.println("Stopping movement since danger zone is detected.");
+
+                        // Send message only once per threat encounter
+                        if (!threatMessageSent) {
+                            ChatUtils.sendChatMessages(bot.getCommandSource().withSilent().withMaxLevel(4), "Terminating all current tasks due to threat detections");
+                            threatMessageSent = true;
+                        }
                         server.getCommandManager().executeWithPrefix(bot.getCommandSource().withSilent().withMaxLevel(4), "/player " + bot.getName().getString() + " stop");
                     }
 
@@ -260,19 +514,34 @@ public class AutoFaceEntity {
                 }
 
                 else {
+                    // No hostile entities detected - bot is safe
 
-                    if ((PathTracer.BotSegmentManager.getBotMovementStatus() || isBotMoving) || blockDetectionUnit.getBlockDetectionStatus() || isBotExecutingTask()) {
-                        System.out.println("Bot is busy, skipping facing the closest entity");
+                    // Reset threat message flag when out of danger
+                    threatMessageSent = false;
+
+                    // If bot is still locked on shooting target, check if it's still valid
+                    if (isShooting) {
+                        if (isShootingTargetValid()) {
+                            System.out.println("No hostile entities detected, but shooting target still valid");
+                            // Continue facing the shooting target even if no hostiles nearby
+                            FaceClosestEntity.faceClosestEntity(bot, List.of(shootingTarget));
+                            return;
+                        } else {
+                            System.out.println("Shooting target no longer valid, clearing lock");
+                            clearShootingTarget();
+                        }
                     }
 
-                    else {
-                        botBusy = false; // Clear the flag if no hostile entities are in front
+                    // Clear hostile entity flags
+                    botBusy = false;
+                    hostileEntityInFront = false;
 
-                        hostileEntityInFront = false;
+                    // Face nearby entities (players, passive mobs, etc.) - but only if bot is NOT busy with tasks
+//                    LOGGER.debug("PathTracer Movement Status: {}, isBotMoving: {}, Block Detection Status: {}, isBotExecutingTask: {}", PathTracer.BotSegmentManager.getBotMovementStatus(), isBotMoving, blockDetectionUnit.getBlockDetectionStatus(), isBotExecutingTask());
 
+                    if (!((PathTracer.BotSegmentManager.getBotMovementStatus() || isBotMoving) || blockDetectionUnit.getBlockDetectionStatus() || isBotExecutingTask())) {
                         FaceClosestEntity.faceClosestEntity(bot, nearbyEntities);
                     }
-
                 }
 
 
@@ -300,7 +569,7 @@ public class AutoFaceEntity {
             }
 
 
-        }, 0, INTERVAL_SECONDS, TimeUnit.SECONDS);
+        }, 0, 33, TimeUnit.MILLISECONDS); // Run every 33ms (30 FPS) for ultra-fast projectile detection
 
     }
 
@@ -315,6 +584,376 @@ public class AutoFaceEntity {
         });
     }
 
+
+    /**
+     * ADAPTIVE PANIC EVASION - Universal evasion method for all distances
+     *
+     * Calculation Logic:
+     * 1. Average player can accurately hit moving target at ~15 blocks max
+     * 2. Arrow travel time: ~1.5 seconds for 15 blocks
+     * 3. Player reaction/tracking time: ~0.5-1.0 seconds
+     * 4. Bot needs to keep moving for: arrow travel time + tracking difficulty time
+     * 5. Closer shooter = less arrow travel time, but bot needs LONGER evasion (harder to dodge)
+     * 6. Formula: evasionTime = baseTime + (distanceCompensation * distance)
+     *
+     * Distance-based timing:
+     * - 5m:  Move for 2000ms (close range, need maximum evasion)
+     * - 10m: Move for 1500ms (medium range)
+     * - 15m: Move for 1200ms (far range, arrow drops more)
+     * - 20m: Move for 1000ms (very far, arrow very inaccurate)
+     */
+    // Evasion state tracking
+    private static volatile boolean isEvading = false;
+    private static volatile long evasionStartTime = 0;
+    private static volatile net.minecraft.entity.LivingEntity evasionThreatSource = null;
+    private static volatile int evasionTickCounter = 0;
+    private static final double SAFE_ESCAPE_DISTANCE = 25.0; // Consider safe when 25+ blocks away
+
+    public static void executeAdaptivePanicEvasion(ServerPlayerEntity bot, PredictiveThreatDetector.DrawingBowThreat threat, MinecraftServer server) {
+        Vec3d botPos = bot.getPos();
+        Vec3d shooterPos = threat.shooterPos;
+        double distance = threat.distance;
+
+        // Mark that we're evading
+        isEvading = true;
+        evasionStartTime = System.currentTimeMillis();
+        evasionThreatSource = threat.shooter;
+        evasionTickCounter = 0;
+
+        LOGGER.info("⚡ ADAPTIVE EVASION: Starting from distance {}m (will stop at {}m or threat eliminated)",
+            String.format("%.1f", distance), SAFE_ESCAPE_DISTANCE);
+
+        // Calculate direction AWAY from shooter with randomness
+        Vec3d awayFromShooter = botPos.subtract(shooterPos).normalize();
+
+        // Add large random angle (±45 degrees) for unpredictability
+        double randomAngle = (Math.random() - 0.5) * Math.PI / 2.0; // ±90 degrees
+        double cos = Math.cos(randomAngle);
+        double sin = Math.sin(randomAngle);
+        Vec3d scrambledDir = new Vec3d(
+            awayFromShooter.x * cos - awayFromShooter.z * sin,
+            0,
+            awayFromShooter.x * sin + awayFromShooter.z * cos
+        ).normalize();
+
+        // Face scrambled direction
+        double yaw = Math.toDegrees(Math.atan2(scrambledDir.z, scrambledDir.x)) - 90;
+        bot.setYaw((float) yaw);
+
+        LOGGER.info("💨 PANIC! Scrambling away at random angle from shooter!");
+
+        // Start sprinting AND moving forward immediately
+        server.getCommandManager().executeWithPrefix(bot.getCommandSource().withSilent().withMaxLevel(4),
+            "/player " + bot.getName().getString() + " sprint");
+        server.getCommandManager().executeWithPrefix(bot.getCommandSource().withSilent().withMaxLevel(4),
+            "/player " + bot.getName().getString() + " move forward");
+    }
+
+    /**
+     * Called every autoface tick to check if evasion should continue or stop
+     * This replaces the fixed-duration timer approach
+     */
+    private static void updateEvasionStatus(ServerPlayerEntity bot, MinecraftServer server) {
+        if (!isEvading || evasionThreatSource == null) {
+            return; // Not evading
+        }
+
+        evasionTickCounter++;
+
+        // Check if threat is eliminated
+        if (!evasionThreatSource.isAlive() || evasionThreatSource.isRemoved()) {
+            LOGGER.info("✓ Evasion complete - threat eliminated");
+            stopEvasion(bot, server);
+            return;
+        }
+
+        // Check if bot has reached safe distance
+        double currentDistance = Math.sqrt(bot.squaredDistanceTo(evasionThreatSource.getPos()));
+        if (currentDistance >= SAFE_ESCAPE_DISTANCE) {
+            LOGGER.info("✓ Evasion complete - reached safe distance ({}m)", String.format("%.1f", currentDistance));
+            stopEvasion(bot, server);
+            return;
+        }
+
+        // Timeout after 10 seconds (safety fallback) - 300 ticks at 30fps
+        if (evasionTickCounter > 300) {
+            LOGGER.warn("⚠ Evasion timeout (10s) - stopping");
+            stopEvasion(bot, server);
+            return;
+        }
+
+        // Still evading - occasionally jump and adjust direction
+        if (evasionTickCounter % 9 == 0) { // Jump roughly every 300ms (9 ticks at 33ms intervals)
+            server.getCommandManager().executeWithPrefix(bot.getCommandSource().withSilent().withMaxLevel(4),
+                "/player " + bot.getName().getString() + " jump");
+        }
+
+        // Adjust direction every ~600ms for unpredictability (18 ticks)
+        if (evasionTickCounter % 18 == 0 && evasionTickCounter > 18) {
+            Vec3d botPos = bot.getPos();
+            Vec3d threatPos = evasionThreatSource.getPos();
+            Vec3d awayFromThreat = botPos.subtract(threatPos).normalize();
+
+            double newRandomAngle = (Math.random() - 0.5) * Math.PI / 6.0; // ±30 degrees
+            double newCos = Math.cos(newRandomAngle);
+            double newSin = Math.sin(newRandomAngle);
+            Vec3d newScrambledDir = new Vec3d(
+                awayFromThreat.x * newCos - awayFromThreat.z * newSin,
+                0,
+                awayFromThreat.x * newSin + awayFromThreat.z * newCos
+            ).normalize();
+
+            double newYaw = Math.toDegrees(Math.atan2(newScrambledDir.z, newScrambledDir.x)) - 90;
+            bot.setYaw((float) newYaw);
+        }
+    }
+
+    /**
+     * Stop evasion maneuvers
+     */
+    private static void stopEvasion(ServerPlayerEntity bot, MinecraftServer server) {
+        if (!isEvading) {
+            return;
+        }
+
+        isEvading = false;
+        evasionThreatSource = null;
+        evasionTickCounter = 0;
+
+        // Stop all movement
+        server.getCommandManager().executeWithPrefix(bot.getCommandSource().withSilent().withMaxLevel(4),
+            "/player " + bot.getName().getString() + " stop");
+
+        // ✅ Signal action completion
+        net.shasankp000.GameAI.BotEventHandler.completeAction(bot.getName().getString());
+    }
+
+    /**
+     * Set the target that the bot is currently shooting at
+     * This will make autoface lock onto this target with priority
+     */
+    public static void setShootingTarget(Entity target) {
+        shootingTarget = target;
+        shootingStartTime = System.currentTimeMillis();
+        isShooting = true;
+        LOGGER.info("Shooting target set to: {}", target != null ? target.getName().getString() : "null");
+    }
+
+    /**
+     * Clear the shooting target and resume normal autoface
+     */
+    public static void clearShootingTarget() {
+        if (shootingTarget != null) {
+            LOGGER.info("Clearing shooting target: {}", shootingTarget.getName().getString());
+        }
+        shootingTarget = null;
+        shootingStartTime = 0;
+        isShooting = false;
+    }
+
+    /**
+     * Check if the shooting target is still valid
+     * Returns false if target is dead, removed, or timeout exceeded
+     */
+    private static boolean isShootingTargetValid() {
+        if (shootingTarget == null) {
+            return false;
+        }
+
+        // Check if target is dead or removed
+        if (!shootingTarget.isAlive() || shootingTarget.isRemoved()) {
+            LOGGER.info("Shooting target {} is no longer valid (dead/removed)", shootingTarget.getName().getString());
+            clearShootingTarget();
+            return false;
+        }
+
+        // Check for timeout (10 seconds max lock)
+        long elapsed = System.currentTimeMillis() - shootingStartTime;
+        if (elapsed > 10000) {
+            LOGGER.warn("Shooting target lock timeout after {} ms", elapsed);
+            clearShootingTarget();
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Set projectile defense mode - called when defending from projectiles
+     */
+    public static void setProjectileDefenseMode(ProjectileDefenseUtils.IncomingProjectile threat, String mode) {
+        currentThreat = threat;
+        defenseMode = mode;
+        isDefendingFromProjectile = true;
+        LOGGER.info("Projectile defense mode set to: {} for {}", mode, threat.projectileType);
+    }
+
+    /**
+     * Clear projectile defense mode and resume normal operations
+     */
+    public static void clearProjectileDefenseMode() {
+        if (currentThreat != null) {
+            LOGGER.info("✓ Dodged {} - Threat cleared", currentThreat.projectileType);
+        }
+        currentThreat = null;
+        defenseMode = "none";
+        isDefendingFromProjectile = false;
+        dodgeExecuted = false; // Reset for next threat
+    }
+
+    /**
+     * Start persistent shield blocking against an entity
+     * Shield will remain raised until entity stops using ranged weapons
+     */
+    public static void startPersistentBlocking(ServerPlayerEntity bot, net.minecraft.entity.LivingEntity attacker, MinecraftServer server) {
+        if (isActivelyBlocking && blockingAgainst != null && blockingAgainst.equals(attacker)) {
+            // Already blocking against this entity
+            return;
+        }
+
+        isActivelyBlocking = true;
+        blockingAgainst = attacker;
+        blockingStartTime = System.currentTimeMillis();
+
+        String botName = bot.getName().getString();
+        net.minecraft.server.command.ServerCommandSource botSource =
+            bot.getCommandSource().withSilent().withMaxLevel(4);
+
+        LOGGER.info("🛡 STARTING PERSISTENT SHIELD BLOCK against {}", attacker.getName().getString());
+
+        // Activate continuous shield blocking
+        server.execute(() -> {
+            server.getCommandManager().executeWithPrefix(botSource,
+                "/player " + botName + " use continuous");
+            LOGGER.info("🛡 Shield block activated - will maintain until threat ends");
+        });
+    }
+
+    /**
+     * Stop persistent shield blocking
+     */
+    public static void stopPersistentBlocking(ServerPlayerEntity bot, MinecraftServer server) {
+        if (!isActivelyBlocking) {
+            return; // Not currently blocking
+        }
+
+        String botName = bot.getName().getString();
+        net.minecraft.server.command.ServerCommandSource botSource =
+            bot.getCommandSource().withSilent().withMaxLevel(4);
+
+        long blockDuration = System.currentTimeMillis() - blockingStartTime;
+        LOGGER.info("🛡 STOPPING PERSISTENT SHIELD BLOCK (blocked for {}ms)", blockDuration);
+
+        // Release shield
+        server.execute(() -> {
+            server.getCommandManager().executeWithPrefix(botSource,
+                "/player " + botName + " use");
+            LOGGER.info("✓ Shield block released");
+        });
+
+        isActivelyBlocking = false;
+        blockingAgainst = null;
+        blockingStartTime = 0;
+    }
+
+    /**
+     * Check if the entity we're blocking against is still a ranged threat
+     * Returns false if entity stopped using bow/crossbow, is dead, or too far away
+     */
+    public static boolean isBlockingThreatStillValid(ServerPlayerEntity bot) {
+        if (!isActivelyBlocking || blockingAgainst == null) {
+            return false;
+        }
+
+        // Check if attacker is still alive
+        if (!blockingAgainst.isAlive() || blockingAgainst.isRemoved()) {
+            LOGGER.info("🛡 Blocking threat no longer valid - entity dead/removed");
+            return false;
+        }
+
+        // Check distance (stop blocking if too far)
+        double distance = Math.sqrt(blockingAgainst.squaredDistanceTo(bot));
+        if (distance > 30.0) { // 30 block cutoff
+            LOGGER.info("🛡 Blocking threat too far away ({}m) - releasing block", String.format("%.1f", distance));
+            return false;
+        }
+
+        // Check if entity is still using a ranged weapon
+        net.minecraft.item.ItemStack activeItem = blockingAgainst.getActiveItem();
+        net.minecraft.item.ItemStack mainHand = blockingAgainst.getMainHandStack();
+
+        boolean hasRangedWeapon = isRangedWeapon(activeItem) || isRangedWeapon(mainHand);
+
+        if (!hasRangedWeapon) {
+            LOGGER.info("🛡 Attacker {} switched away from ranged weapon - releasing block",
+                blockingAgainst.getName().getString());
+            return false;
+        }
+
+        // Timeout after 30 seconds of continuous blocking
+        long blockDuration = System.currentTimeMillis() - blockingStartTime;
+        if (blockDuration > 30000) {
+            LOGGER.warn("🛡 Shield block timeout after 30s - releasing");
+            return false;
+        }
+
+        return true;
+    }
+
+    /**
+     * Check if an item stack is a ranged weapon (bow or crossbow)
+     */
+    private static boolean isRangedWeapon(net.minecraft.item.ItemStack stack) {
+        if (stack.isEmpty()) {
+            return false;
+        }
+
+        String itemId = net.minecraft.registry.Registries.ITEM.getId(stack.getItem()).toString();
+        return itemId.contains("bow") || itemId.contains("crossbow");
+    }
+
+    /**
+     * Update persistent shield blocking state - call this in the main loop
+     * Manages shield blocking lifecycle and faces the attacker
+     */
+    public static void updatePersistentBlocking(ServerPlayerEntity bot, MinecraftServer server) {
+        if (!isActivelyBlocking) {
+            return; // Not blocking
+        }
+
+        // Check if threat is still valid
+        if (!isBlockingThreatStillValid(bot)) {
+            stopPersistentBlocking(bot, server);
+            return;
+        }
+
+        // Keep facing the attacker while blocking
+        Vec3d botPos = bot.getPos();
+        Vec3d attackerPos = blockingAgainst.getPos();
+        Vec3d toAttacker = attackerPos.subtract(botPos).normalize();
+
+        double yaw = Math.toDegrees(Math.atan2(toAttacker.z, toAttacker.x)) - 90;
+        double horizontalDistance = Math.sqrt(toAttacker.x * toAttacker.x + toAttacker.z * toAttacker.z);
+        double pitch = -Math.toDegrees(Math.atan2(toAttacker.y, horizontalDistance));
+
+        bot.setYaw((float) yaw);
+        bot.setPitch((float) pitch);
+
+        // Log every few seconds to avoid spam
+        long elapsed = System.currentTimeMillis() - blockingStartTime;
+        if (elapsed % 3000 < 50) { // Log roughly every 3 seconds
+            double distance = Math.sqrt(blockingAgainst.squaredDistanceTo(bot));
+            LOGGER.info("🛡 Actively blocking against {} at {}m",
+                blockingAgainst.getName().getString(), String.format("%.1f", distance));
+        }
+    }
+
+    /**
+     * Check if currently defending from a projectile
+     */
+    public static boolean isDefendingFromProjectile() {
+        return isDefendingFromProjectile && currentThreat != null;
+    }
 
     public static void stopAutoFace(ServerPlayerEntity bot) {
         ScheduledExecutorService executor = botExecutors.remove(bot);

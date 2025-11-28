@@ -5,10 +5,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.github.amithkoujalgi.ollama4j.core.OllamaAPI;
 import io.github.amithkoujalgi.ollama4j.core.exceptions.OllamaBaseException;
-import io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessageRole;
-import io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatRequestBuilder;
-import io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatRequestModel;
-import io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatResult;
+import io.github.amithkoujalgi.ollama4j.core.models.chat.*;
 import net.shasankp000.AIPlayer;
 import net.shasankp000.FilingSystem.LLMClientFactory;
 import net.shasankp000.ServiceLLMClients.LLMClient;
@@ -200,21 +197,23 @@ public class WebSearchTool {
             case "ollama":
                 ollamaAPI.setRequestTimeoutSeconds(120);
 
-                OllamaChatRequestBuilder builder = OllamaChatRequestBuilder.getInstance(selectedLM);
-                OllamaChatRequestModel requestModel1 = builder
-                        .withMessage(OllamaChatMessageRole.SYSTEM, queryConvo.toString())
-                        .withMessage(OllamaChatMessageRole.USER, prompt)
-                        .build();
-
-
-
                 try {
-                    OllamaChatResult chatResult1 = ollamaAPI.chat(requestModel1);
+                    List<OllamaChatMessage> messages = new java.util.ArrayList<>();
+                    messages.add(new OllamaChatMessage(OllamaChatMessageRole.SYSTEM, queryConvo.toString()));
+                    messages.add(new OllamaChatMessage(OllamaChatMessageRole.USER, prompt));
 
-                    response = chatResult1.getResponse();
+                    net.shasankp000.OllamaClient.OllamaThinkingResponse thinkingResponse =
+                            net.shasankp000.OllamaClient.OllamaAPIHelper.smartChat(
+                                    ollamaAPI,
+                                    "http://localhost:11434",
+                                    selectedLM,
+                                    messages
+                            );
+
+                    response = thinkingResponse.getContent();
                     System.out.println("Generated query: " + response);
 
-                } catch (OllamaBaseException | IOException | InterruptedException e) {
+                } catch (IOException | InterruptedException e) {
                     logger.error("Caught exception while creating queries: {} ", (Object) e.getStackTrace());
                     System.out.println(response);
                     throw new RuntimeException(e);
@@ -267,19 +266,23 @@ public class WebSearchTool {
         else {
             logger.warn("{} is not reachable at the moment, falling back to ollama client.", client.getProvider());
 
-            OllamaChatRequestBuilder builder = OllamaChatRequestBuilder.getInstance(selectedLM);
-            OllamaChatRequestModel requestModel1 = builder
-                    .withMessage(OllamaChatMessageRole.SYSTEM, queryConvo.toString())
-                    .withMessage(OllamaChatMessageRole.USER, prompt)
-                    .build();
-
             try {
-                OllamaChatResult chatResult1 = ollamaAPI.chat(requestModel1);
+                List<OllamaChatMessage> messages = new java.util.ArrayList<>();
+                messages.add(new OllamaChatMessage(OllamaChatMessageRole.SYSTEM, queryConvo.toString()));
+                messages.add(new OllamaChatMessage(OllamaChatMessageRole.USER, prompt));
 
-                response = chatResult1.getResponse();
+                net.shasankp000.OllamaClient.OllamaThinkingResponse thinkingResponse =
+                        net.shasankp000.OllamaClient.OllamaAPIHelper.smartChat(
+                                ollamaAPI,
+                                "http://localhost:11434",
+                                selectedLM,
+                                messages
+                        );
+
+                response = thinkingResponse.getContent();
                 System.out.println("Generated query: " + response);
 
-            } catch (OllamaBaseException | IOException | InterruptedException e) {
+            } catch (IOException | InterruptedException e) {
                 logger.error("Caught exception while creating queries: {} ", (Object) e.getStackTrace());
                 System.out.println(response);
                 throw new RuntimeException(e);

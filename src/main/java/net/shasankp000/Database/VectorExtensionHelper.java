@@ -26,9 +26,9 @@ public class VectorExtensionHelper {
     private static final String LINUX_VEC_URL = "https://github.com/asg017/sqlite-vec/releases/download/v0.1.6/sqlite-vec-0.1.6-loadable-linux-x86_64.tar.gz";
     private static final String MACOS_VEC_URL = "https://github.com/asg017/sqlite-vec/releases/download/v0.1.6/sqlite-vec-0.1.6-loadable-macos-x86_64.tar.gz";
 
-    private static final String VECTOR_FILENAME_WINDOWS = "vector0.dll";
-    private static final String VECTOR_FILENAME_LINUX = "vector0.so";
-    private static final String VECTOR_FILENAME_MACOS = "vector0.dylib";
+    private static final String VECTOR_FILENAME_WINDOWS = "vec0.dll";
+    private static final String VECTOR_FILENAME_LINUX = "vec0.so";
+    private static final String VECTOR_FILENAME_MACOS = "vec0.dylib";
 
     // === SQLITE-VSS ===
     private static final String VSS_LINUX_URL = "https://github.com/asg017/sqlite-vss/releases/download/v0.1.2/sqlite-vss-v0.1.2-loadable-linux-x86_64.tar.gz";
@@ -36,6 +36,29 @@ public class VectorExtensionHelper {
 
     private static final String VSS_FILENAME_LINUX = "vss0.so";
     private static final String VSS_FILENAME_MACOS = "vss0.dylib";
+
+    // === HELPER METHODS ===
+
+    /**
+     * Clean up old incorrectly-named extension files from buggy versions.
+     */
+    private static void cleanupOldVecFiles(Path dir, String correctName) {
+        try {
+            // List of old incorrect names that might exist
+            String[] oldNames = {"vector0.dll", "vector0.so", "vector0.dylib"};
+            for (String oldName : oldNames) {
+                if (!oldName.equals(correctName)) {
+                    Path oldFile = dir.resolve(oldName);
+                    if (Files.exists(oldFile)) {
+                        Files.delete(oldFile);
+                        LOGGER.info("🧹 Cleaned up old incorrectly-named file: {}", oldFile);
+                    }
+                }
+            }
+        } catch (IOException e) {
+            LOGGER.warn("⚠️ Failed to clean up old files: {}", e.getMessage());
+        }
+    }
 
     // === SQLITE-VEC ===
 
@@ -64,6 +87,10 @@ public class VectorExtensionHelper {
         }
 
         Path outputPath = vecDir.resolve(targetFileName);
+
+        // Clean up old incorrectly-named files (from previous buggy versions)
+        cleanupOldVecFiles(vecDir, targetFileName);
+
         if (Files.exists(outputPath)) {
             LOGGER.info("✅ sqlite-vec already present at: {}", outputPath);
             return outputPath;
@@ -115,6 +142,21 @@ public class VectorExtensionHelper {
         }
 
         Path outputPath = vssDir.resolve(targetFileName);
+
+        // Clean up old files and any vector0.* files that shouldn't be here
+        try {
+            String[] unwantedFiles = {"vector0.so", "vector0.dylib"};
+            for (String unwanted : unwantedFiles) {
+                Path unwantedFile = vssDir.resolve(unwanted);
+                if (Files.exists(unwantedFile)) {
+                    Files.delete(unwantedFile);
+                    LOGGER.info("🧹 Cleaned up unwanted file from vss directory: {}", unwantedFile);
+                }
+            }
+        } catch (IOException e) {
+            LOGGER.warn("⚠️ Failed to clean up unwanted files: {}", e.getMessage());
+        }
+
         if (Files.exists(outputPath)) {
             LOGGER.info("✅ sqlite-vss already present at: {}", outputPath);
             return outputPath;
@@ -143,10 +185,12 @@ public class VectorExtensionHelper {
     }
 
     /**
-     * Shared TAR extractor.
+     * Shared TAR extractor - extracts only the specified file from a TAR archive.
      */
     private static boolean safeExtractTar(InputStream tarInputStream, String targetFileName, Path outputPath) throws IOException {
         byte[] header = new byte[512];
+        boolean found = false;
+
         while (true) {
             int read = tarInputStream.read(header);
             if (read < 512) break;
@@ -158,7 +202,11 @@ public class VectorExtensionHelper {
 
             LOGGER.info("🔍 TAR entry: {} ({} bytes)", name, size);
 
-            if (name.equals(targetFileName) || name.endsWith(targetFileName) || name.contains("vec0")) {
+            // Only extract the exact file we're looking for (handle both bare names and paths)
+            boolean isMatch = name.equals(targetFileName) || name.endsWith("/" + targetFileName);
+
+            if (isMatch) {
+                LOGGER.info("✅ Found target file '{}' in archive, extracting to: {}", targetFileName, outputPath);
                 try (OutputStream out = Files.newOutputStream(outputPath)) {
                     byte[] buffer = new byte[4096];
                     long remaining = size;
@@ -169,10 +217,14 @@ public class VectorExtensionHelper {
                         remaining -= len;
                     }
                 }
-                LOGGER.info("✅ Extracted: {}", outputPath);
-                return true;
-            } else {
-                long skip = size + (512 - (size % 512)) % 512;
+                LOGGER.info("✅ Successfully extracted: {}", outputPath);
+                found = true;
+                // Continue to skip remaining entries
+            }
+
+            // Skip this entry's data (including padding to 512-byte boundary)
+            long skip = size + (512 - (size % 512)) % 512;
+            if (!isMatch) {
                 while (skip > 0) {
                     long skipped = tarInputStream.skip(skip);
                     if (skipped <= 0) break;
@@ -180,11 +232,17 @@ public class VectorExtensionHelper {
                 }
             }
         }
-        return false;
+
+        return found;
     }
 
     public static void loadSqliteVecExtension(Connection conn, Path vecPath) throws SQLException, IOException {
-        String path = vecPath.toAbsolutePath().toString().replace("\\", "\\\\");
+        // Remove extension from path as SQLite will add it automatically
+        String path = vecPath.toAbsolutePath().toString();
+        // Strip extension (.dll, .so, .dylib) from the end
+        path = path.replaceAll("\\.(dll|so|dylib)$", "");
+        path = path.replace("\\", "\\\\");
+
         try (Statement stmt = conn.createStatement()) {
             stmt.execute("SELECT load_extension('" + path + "', 'sqlite3_vec_init');");
             LOGGER.info("✅ Loaded sqlite-vec extension");
@@ -194,7 +252,12 @@ public class VectorExtensionHelper {
     }
 
     public static void loadSqliteVssExtension(Connection conn, Path vssPath) throws SQLException, IOException {
-        String path = vssPath.toAbsolutePath().toString().replace("\\", "\\\\");
+        // Remove extension from path as SQLite will add it automatically
+        String path = vssPath.toAbsolutePath().toString();
+        // Strip extension (.dll, .so, .dylib) from the end
+        path = path.replaceAll("\\.(dll|so|dylib)$", "");
+        path = path.replace("\\", "\\\\");
+
         try (Statement stmt = conn.createStatement()) {
             stmt.execute("SELECT load_extension('" + path + "', 'sqlite3_vss_init');");
             LOGGER.info("✅ Loaded sqlite-vss extension");

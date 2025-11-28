@@ -105,18 +105,25 @@ public class helperMethods {
 
         queryConvo.add(queryMap1);
 
-        OllamaChatRequestBuilder builder = OllamaChatRequestBuilder.getInstance("llama3.2:latest");
-        OllamaChatRequestModel requestModel1 = builder
-                .withMessage(OllamaChatMessageRole.SYSTEM, queryConvo.toString())
-                .withMessage(OllamaChatMessageRole.USER, prompt)
-                .build();
+        // Use new API helper for thinking mode support
+        List<io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessage> messages = new java.util.ArrayList<>();
+        messages.add(new io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessage(
+                OllamaChatMessageRole.SYSTEM, queryConvo.toString()));
+        messages.add(new io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessage(
+                OllamaChatMessageRole.USER, prompt));
 
         String response = "";
 
         try {
-            OllamaChatResult chatResult1 = ollamaAPI.chat(requestModel1);
+            net.shasankp000.OllamaClient.OllamaThinkingResponse thinkingResponse =
+                    net.shasankp000.OllamaClient.OllamaAPIHelper.smartChat(
+                            ollamaAPI,
+                            "http://localhost:11434",
+                            net.shasankp000.AIPlayer.CONFIG.getSelectedLanguageModel(),
+                            messages
+                    );
 
-            response = chatResult1.getResponse();
+            response = thinkingResponse.getContent();
 
 
             int startIndex = response.indexOf('[');
@@ -132,7 +139,7 @@ public class helperMethods {
                 return vectorDBQueries;
             }
 
-        } catch (OllamaBaseException | IOException | InterruptedException e) {
+        } catch (IOException | InterruptedException e) {
             LOGGER.error("Caught exception while creating queries: {} ", (Object) e.getStackTrace());
             System.out.println(response);
             throw new RuntimeException(e);
@@ -276,20 +283,28 @@ public class helperMethods {
         String userEnd = "This is the user prompt: " + prompt;
         String queryData = "This is the generated query list: " + "\n" + QueryList.toString();
 
-        OllamaChatRequestBuilder builder = OllamaChatRequestBuilder.getInstance("llama3.2:latest");
-        OllamaChatRequestModel requestModel2 = builder
-                .withMessage(OllamaChatMessageRole.SYSTEM, sys_prompt)
-                .withMessage(OllamaChatMessageRole.USER, userEnd)
-                .withMessage(OllamaChatMessageRole.USER, queryData)
-                .build();
+        // Use new API helper for thinking mode support
+        List<io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessage> messages = new java.util.ArrayList<>();
+        messages.add(new io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessage(
+                OllamaChatMessageRole.SYSTEM, sys_prompt));
+        messages.add(new io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessage(
+                OllamaChatMessageRole.USER, userEnd));
+        messages.add(new io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessage(
+                OllamaChatMessageRole.USER, queryData));
 
         String response;
 
 
         try {
-            OllamaChatResult chatResult1 = ollamaAPI.chat(requestModel2);
+            net.shasankp000.OllamaClient.OllamaThinkingResponse thinkingResponse =
+                    net.shasankp000.OllamaClient.OllamaAPIHelper.smartChat(
+                            ollamaAPI,
+                            "http://localhost:11434",
+                            net.shasankp000.AIPlayer.CONFIG.getSelectedLanguageModel(),
+                            messages
+                    );
 
-            response = chatResult1.getResponse();
+            response = thinkingResponse.getContent();
 
             System.out.println("Event classifier: " + "\n" + response);
 
@@ -305,7 +320,7 @@ public class helperMethods {
             }
 
 
-        } catch (OllamaBaseException | IOException | InterruptedException e) {
+        } catch (IOException | InterruptedException e) {
             LOGGER.error("Caught new exception while classifying queries: {}", e.getMessage());
             throw new RuntimeException(e);
         }

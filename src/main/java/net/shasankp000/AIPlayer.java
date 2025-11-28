@@ -13,12 +13,14 @@ import net.shasankp000.ChatUtils.BERTModel.BertModelManager;
 import net.shasankp000.ChatUtils.NLPProcessor;
 import net.shasankp000.Commands.configCommand;
 import net.shasankp000.Commands.modCommandRegistry;
+import net.shasankp000.Database.QTable;
 import net.shasankp000.Database.SQLiteDB;
 import net.shasankp000.FilingSystem.ManualConfig;
 import net.shasankp000.GameAI.BotEventHandler;
 
 import net.shasankp000.Database.QTableStorage;
 import net.shasankp000.Entity.AutoFaceEntity;
+import net.shasankp000.GameAI.RLAgent;
 import net.shasankp000.Network.OpenConfigPayload;
 import net.shasankp000.Network.SaveAPIKeyPayload;
 import net.shasankp000.Network.SaveConfigPayload;
@@ -47,6 +49,16 @@ public class AIPlayer implements ModInitializer {
 		LOGGER.info("Hello Fabric world!");
 
 		LOGGER.debug("Running on environment type: {}", FabricLoader.getInstance().getEnvironmentType());
+
+		// Fix DJL cache directory path on Windows (Issue #33)
+		// DJL constructs paths incorrectly on Windows, missing backslash after username
+		// Explicitly set the cache directory to avoid path construction bugs
+		String userHome = System.getProperty("user.home");
+		if (userHome != null && !userHome.isEmpty()) {
+			String djlCacheDir = userHome + "/.djl.ai";
+			System.setProperty("DJL_CACHE_DIR", djlCacheDir);
+			LOGGER.info("Set DJL cache directory to: {}", djlCacheDir);
+		}
 
 		String llmProvider = System.getProperty("aiplayer.llmMode", "ollama");
 
@@ -135,23 +147,29 @@ public class AIPlayer implements ModInitializer {
 
 		});
 
-		ServerLivingEntityEvents.AFTER_DEATH.register((entity, damageSource) -> {
-			if (entity instanceof ServerPlayerEntity serverPlayer) {
+        ServerLivingEntityEvents.AFTER_DEATH.register((entity, damageSource) -> {
+            if (entity instanceof ServerPlayerEntity serverPlayer) {
+                if (BotEventHandler.bot != null && serverPlayer.getUuid().equals(BotEventHandler.bot.getUuid())) {
+                    // Save state first
+                    QTableStorage.saveLastKnownState(BotEventHandler.getCurrentState(), BotEventHandler.qTableDir + "/lastKnownState.bin");
 
-				if (BotEventHandler.bot != null) {
+                    try {
+                        // Load needed data for learning
+                        QTable qTable = QTableStorage.loadQTable();
+                        if (qTable == null) qTable = new QTable();
 
-					if(serverPlayer.getName().getString().equals(BotEventHandler.bot.getName().getString())) {
+                        // Create a temporary agent wrapper for the learning process
+                        RLAgent tempAgent = new RLAgent(0.1, qTable);
 
-						QTableStorage.saveLastKnownState(BotEventHandler.getCurrentState(), BotEventHandler.qTableDir + "/lastKnownState.bin");
+                        // Trigger death learning
+                        BotEventHandler.handleBotDeath(qTable, tempAgent);
 
-						BotEventHandler.botDied = true; // set flag for bot's death.
-//						System.out.println("Set botDied flag to true");
-					}
-				}
-
-			}
-
-		});
+                    } catch (Exception e) {
+                        LOGGER.error("Error during death learning trigger: ", e);
+                    }
+                }
+            }
+        });
 
 		ServerPlayerEvents.AFTER_RESPAWN.register((oldPlayer, newPlayer, alive) -> {
 			// Check if the respawned player is the bot
@@ -161,6 +179,19 @@ public class AIPlayer implements ModInitializer {
 				BotEventHandler.botSpawnCount++;
 
 			}
+		});
+
+		// Player retaliation tracking - track hits on bot players
+		ServerLivingEntityEvents.ALLOW_DAMAGE.register((entity, source, amount) -> {
+			// Check if the damaged entity is a bot player
+			if (entity instanceof ServerPlayerEntity bot) {
+				// Check if damage source is another player
+				if (source.getAttacker() instanceof net.minecraft.entity.player.PlayerEntity attacker) {
+					// Record the hit for retaliation tracking
+					net.shasankp000.PlayerUtils.PlayerRetaliationTracker.recordPlayerHit(bot, attacker);
+				}
+			}
+			return true; // Allow damage to proceed
 		});
 
 	}

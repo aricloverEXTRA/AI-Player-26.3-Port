@@ -62,8 +62,28 @@ public class NLPProcessor {
         Path openNlpModelsDir = modelDir.resolve("OpenNLPModels");
 
         int maxRetries = 2;
-
         int currentRetry = 0;
+
+        // Check if all models already exist - skip download if so
+        boolean allModelsExist = Files.exists(torchModelDir) &&
+                                 Files.exists(cartDir) &&
+                                 Files.exists(openNlpModelsDir) &&
+                                 Files.exists(LidsNetModelDir);
+
+        if (allModelsExist) {
+            LOGGER.info("✅ All NLP models already downloaded - skipping download");
+            return;
+        }
+
+        // Calculate total steps for progress reporting
+        int totalSteps = 0;
+        if (!Files.exists(torchModelDir)) totalSteps += 2; // Download + Extract BERT
+        if (!Files.exists(cartDir)) totalSteps += 2; // Download + Extract CART
+        if (!Files.exists(openNlpModelsDir)) totalSteps += checkSumFileNameMap.size(); // Download each OpenNLP model
+        if (!Files.exists(LidsNetModelDir)) totalSteps += 2; // Download + Extract LIDSNet
+
+        net.shasankp000.Overlay.NLPDownloadProgressManager.startDownload(totalSteps);
+        int currentStepNum = 0;
 
         try {
             if (!Files.exists(modelDir)) {
@@ -74,6 +94,8 @@ public class NLPProcessor {
             // download fine-tuned BERT file.
 
             if (!Files.exists(torchModelDir)) {
+                currentStepNum++;
+                net.shasankp000.Overlay.NLPDownloadProgressManager.updateProgress("Downloading BERT NLP model...", currentStepNum);
                 LOGGER.info("📥 BERT NLP model not found — downloading for first-time setup...");
 
                 try (InputStream in = new URL(bertModelURL).openStream()) {
@@ -89,6 +111,7 @@ public class NLPProcessor {
                         currentRetry+=1;
 
                         LOGGER.warn("⚠️ BERT NLP model hash mismatch! Re-downloading....");
+                        net.shasankp000.Overlay.NLPDownloadProgressManager.updateProgress("Verifying BERT model (retry " + currentRetry + ")...", currentStepNum);
 
                         Files.deleteIfExists(torchZipFile);
 
@@ -108,6 +131,7 @@ public class NLPProcessor {
 
                     if (currentRetry == maxRetries) {
                         LOGGER.error("Error! Max retries reached and NLP models are still not downloaded. Please check your internet connection or contact developer.");
+                        net.shasankp000.Overlay.NLPDownloadProgressManager.setError("BERT model download failed");
                         throw new IOException("Max retries reached for BERT model and checksum still mismatch");
                     }
 
@@ -129,6 +153,8 @@ public class NLPProcessor {
             // download CART zip file
 
             if (!Files.exists(cartDir)) {
+                currentStepNum++;
+                net.shasankp000.Overlay.NLPDownloadProgressManager.updateProgress("Downloading CART NLP model...", currentStepNum);
                 LOGGER.info("📥 CART NLP model not found — downloading for first-time setup...");
 
                 try (InputStream in = new URL(cartZipURL).openStream()) {
@@ -147,6 +173,7 @@ public class NLPProcessor {
                         currentRetry += 1;
 
                         LOGGER.warn("⚠️ CART NLP model hash mismatch! Re-downloading....");
+                        net.shasankp000.Overlay.NLPDownloadProgressManager.updateProgress("Verifying CART model (retry " + currentRetry + ")...", currentStepNum);
 
                         Files.deleteIfExists(cartZipFile);
 
@@ -165,6 +192,7 @@ public class NLPProcessor {
 
                     if (currentRetry == maxRetries) {
                         LOGGER.error("Error! Max retries reached and NLP models are still not downloaded. Please check your internet connection or contact developer.");
+                        net.shasankp000.Overlay.NLPDownloadProgressManager.setError("CART model download failed");
                         throw new IOException("Max retries reached for CART model and checksum still mismatch");
                     }
 
@@ -194,15 +222,20 @@ public class NLPProcessor {
 
                         Path targetFilePath = openNlpModelsDir.resolve(fileName);
 
+                        currentStepNum++;
+                        net.shasankp000.Overlay.NLPDownloadProgressManager.updateProgress("Downloading OpenNLP: " + fileName, currentStepNum);
                         LOGGER.info("Attempting to download and verify: {}", modelURL);
                         NLPModelSetup.ensureModelDownloaded(targetFilePath, modelURL, expectedSha512);
 
                     } catch (MalformedURLException e) {
                         LOGGER.error("Invalid URL for model: {} - {}", modelURL, e.getMessage());
+                        net.shasankp000.Overlay.NLPDownloadProgressManager.setError("OpenNLP download failed");
                     } catch (IOException e) {
                         LOGGER.error("Failed to download or verify model from {}: {}", modelURL, e.getMessage());
+                        net.shasankp000.Overlay.NLPDownloadProgressManager.setError("OpenNLP download failed");
                     } catch (Exception e) {
                         LOGGER.error("An unexpected error occurred for model {}: {}", modelURL, e.getMessage());
+                        net.shasankp000.Overlay.NLPDownloadProgressManager.setError("OpenNLP download failed");
                     }
                 }
 
@@ -215,6 +248,8 @@ public class NLPProcessor {
             // download LIDSNet
 
             if (!Files.exists(LidsNetModelDir)) {
+                currentStepNum++;
+                net.shasankp000.Overlay.NLPDownloadProgressManager.updateProgress("Downloading LIDSNet model...", currentStepNum);
                 LOGGER.info("📥 LIDSNet NLP model not found — downloading for first-time setup...");
 
                 try (InputStream in = new URL(LIDSNetModelURL).openStream()) {
@@ -230,6 +265,7 @@ public class NLPProcessor {
                         currentRetry+=1;
 
                         LOGGER.warn("⚠️ LIDSNet NLP model hash mismatch! Re-downloading....");
+                        net.shasankp000.Overlay.NLPDownloadProgressManager.updateProgress("Verifying LIDSNet (retry " + currentRetry + ")...", currentStepNum);
 
                         Files.deleteIfExists(LidsNETZipFile);
 
@@ -249,6 +285,7 @@ public class NLPProcessor {
 
                     if (currentRetry == maxRetries) {
                         LOGGER.error("Error! Max retries reached and NLP models are still not downloaded. Please check your internet connection or contact developer.");
+                        net.shasankp000.Overlay.NLPDownloadProgressManager.setError("LIDSNet download failed");
                         throw new IOException("Max retries reached for LIDSNet model and checksum still mismatch");
                     }
 
@@ -271,6 +308,8 @@ public class NLPProcessor {
 
             if (Files.exists(torchZipFile)) {
                 // extract only if the zip file exists
+                currentStepNum++;
+                net.shasankp000.Overlay.NLPDownloadProgressManager.updateProgress("Extracting BERT model...", currentStepNum);
                 System.out.println("Extracting distilBERT PyTorch[TorchScript] model...");
                 try (ZipInputStream zis = new ZipInputStream(new FileInputStream(torchZipFile.toFile()))) {
                     ZipEntry entry;
@@ -293,6 +332,8 @@ public class NLPProcessor {
             // extract CART zip file
 
             if (Files.exists(cartZipFile)) {
+                currentStepNum++;
+                net.shasankp000.Overlay.NLPDownloadProgressManager.updateProgress("Extracting CART model...", currentStepNum);
                 System.out.println("Extracting CART files...");
                 try (ZipInputStream zis = new ZipInputStream(new FileInputStream(cartZipFile.toFile()))) {
                     ZipEntry entry;
@@ -314,6 +355,8 @@ public class NLPProcessor {
             // extract LIDSNet zip file
 
             if (Files.exists(LidsNETZipFile)) {
+                currentStepNum++;
+                net.shasankp000.Overlay.NLPDownloadProgressManager.updateProgress("Extracting LIDSNet model...", currentStepNum);
                 System.out.println("Extracting LIDSNet PyTorch[TorchScript] model... ");
                 try (ZipInputStream zis = new ZipInputStream(new FileInputStream(LidsNETZipFile.toFile()))) {
                     ZipEntry entry;
@@ -339,11 +382,16 @@ public class NLPProcessor {
             Files.deleteIfExists(cartZipFile);
             Files.deleteIfExists(LidsNETZipFile);
 
+            // Mark download as complete
+            net.shasankp000.Overlay.NLPDownloadProgressManager.completeDownload();
+            LOGGER.info("✅ All NLP models successfully downloaded and extracted!");
+
 
 
 
         } catch (IOException e) {
             LOGGER.error("❌ Failed to ensure NLP model: {}", e.getMessage(), e);
+            net.shasankp000.Overlay.NLPDownloadProgressManager.setError("Failed to download NLP models");
         }
     }
 
@@ -534,14 +582,23 @@ public class NLPProcessor {
         String systemPrompt = buildPrompt();
 
         try {
-            OllamaChatRequestModel requestModel = OllamaChatRequestBuilder.getInstance(selectedLM)
-                    .withMessage(OllamaChatMessageRole.SYSTEM, systemPrompt)
-                    .withMessage(OllamaChatMessageRole.USER, userPrompt)
-                    .build();
+            List<io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessage> messages = new java.util.ArrayList<>();
+            messages.add(new io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessage(
+                    OllamaChatMessageRole.SYSTEM, systemPrompt));
+            messages.add(new io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessage(
+                    OllamaChatMessageRole.USER, userPrompt));
 
-            OllamaChatResult chatResult = ollamaAPI.chat(requestModel);
-            String response = chatResult.getResponse().trim();
-            response = stripThinkTags(response);
+            net.shasankp000.OllamaClient.OllamaThinkingResponse thinkingResponse =
+                    net.shasankp000.OllamaClient.OllamaAPIHelper.smartChat(
+                            ollamaAPI,
+                            "http://localhost:11434",
+                            selectedLM,
+                            messages
+                    );
+
+            String response = thinkingResponse.getContent().trim();
+            // No need to strip think tags anymore - they're handled separately
+            // response = stripThinkTags(response);
 
             if (response.equalsIgnoreCase("REQUEST_ACTION") || response.contains("REQUEST_ACTION")) {
                 return Intent.REQUEST_ACTION;

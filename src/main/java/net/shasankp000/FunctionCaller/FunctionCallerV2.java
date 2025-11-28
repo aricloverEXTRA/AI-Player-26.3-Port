@@ -10,13 +10,7 @@ import io.github.amithkoujalgi.ollama4j.core.OllamaAPI;
 
 import io.github.amithkoujalgi.ollama4j.core.exceptions.OllamaBaseException;
 
-import io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessageRole;
-
-import io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatRequestBuilder;
-
-import io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatRequestModel;
-
-import io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatResult;
+import io.github.amithkoujalgi.ollama4j.core.models.chat.*;
 
 import io.github.amithkoujalgi.ollama4j.core.types.OllamaModelType;
 
@@ -559,13 +553,20 @@ public class FunctionCallerV2 {
         \s""";
         OllamaChatRequestBuilder builder = OllamaChatRequestBuilder.getInstance(selectedLM);
         try {
-            OllamaChatRequestModel requestModel = builder
-                    .withMessage(OllamaChatMessageRole.SYSTEM, sysPrompt)
-                    .withMessage(OllamaChatMessageRole.USER, "Player prompt: " + userPrompt)
-                    .build();
-            OllamaChatResult chatResult = ollamaAPI.chat(requestModel);
-            contextOutput = chatResult.getResponse();
-        } catch (OllamaBaseException | IOException | InterruptedException | JsonSyntaxException e) {
+            List<OllamaChatMessage> messages = new java.util.ArrayList<>();
+            messages.add(new OllamaChatMessage(OllamaChatMessageRole.SYSTEM, sysPrompt));
+            messages.add(new OllamaChatMessage(OllamaChatMessageRole.USER, "Player prompt: " + userPrompt));
+
+            net.shasankp000.OllamaClient.OllamaThinkingResponse thinkingResponse =
+                    net.shasankp000.OllamaClient.OllamaAPIHelper.smartChat(
+                            ollamaAPI,
+                            "http://localhost:11434",
+                            net.shasankp000.AIPlayer.CONFIG.getSelectedLanguageModel(),
+                            messages
+                    );
+
+            contextOutput = thinkingResponse.getContent();
+        } catch (IOException | InterruptedException | JsonSyntaxException e) {
             logger.error("{}", (Object) e.getStackTrace());
         }
         return contextOutput;
@@ -649,12 +650,19 @@ public class FunctionCallerV2 {
         String botContext = buildLLMBotContext(initialState, sharedState, surroundings);
         String fullSystemPrompt = systemPrompt + "\n\nBot's context information:\n" + botContext;
         try {
-            OllamaChatRequestModel requestModel = builder
-                    .withMessage(OllamaChatMessageRole.SYSTEM, fullSystemPrompt)
-                    .withMessage(OllamaChatMessageRole.USER, userPrompt)
-                    .build();
-            OllamaChatResult chatResult = ollamaAPI.chat(requestModel);
-            response = chatResult.getResponse();
+            List<OllamaChatMessage> messages = new java.util.ArrayList<>();
+            messages.add(new OllamaChatMessage(OllamaChatMessageRole.SYSTEM, fullSystemPrompt));
+            messages.add(new OllamaChatMessage(OllamaChatMessageRole.USER, userPrompt));
+
+            net.shasankp000.OllamaClient.OllamaThinkingResponse thinkingResponse =
+                    net.shasankp000.OllamaClient.OllamaAPIHelper.smartChat(
+                            ollamaAPI,
+                            "http://localhost:11434",
+                            net.shasankp000.AIPlayer.CONFIG.getSelectedLanguageModel(),
+                            messages
+                    );
+
+            response = thinkingResponse.getContent();
             logger.info("Raw LLM Response: {}", response);
             String cleanedResponse = stripThinkBlock(response);
             String jsonPart = extractJson(cleanedResponse);
@@ -905,12 +913,20 @@ public class FunctionCallerV2 {
 
                     String botContext = buildLLMBotContext(initialState, sharedState, surroundings);
                     String fullSystemPrompt = systemPrompt + "\n\nBot's context information:\n" + botContext;
-                    OllamaChatRequestModel requestModel = builder
-                            .withMessage(OllamaChatMessageRole.SYSTEM, fullSystemPrompt)
-                            .withMessage(OllamaChatMessageRole.USER, newPrompt)
-                            .build();
-                    OllamaChatResult result = ollamaAPI.chat(requestModel);
-                    String llmResponse = result.getResponse();
+
+                    List<OllamaChatMessage> messages = new java.util.ArrayList<>();
+                    messages.add(new OllamaChatMessage(OllamaChatMessageRole.SYSTEM, fullSystemPrompt));
+                    messages.add(new OllamaChatMessage(OllamaChatMessageRole.USER, newPrompt));
+
+                    net.shasankp000.OllamaClient.OllamaThinkingResponse thinkingResponse =
+                            net.shasankp000.OllamaClient.OllamaAPIHelper.smartChat(
+                                    ollamaAPI,
+                                    "http://localhost:11434",
+                                    net.shasankp000.AIPlayer.CONFIG.getSelectedLanguageModel(),
+                                    messages
+                            );
+
+                    String llmResponse = thinkingResponse.getContent();
                     logger.info("Raw LLM response: {}", llmResponse);
                     String cleanedResponse = stripThinkBlock(llmResponse);
                     String jsonPart = extractJson(cleanedResponse);

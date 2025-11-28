@@ -7,7 +7,9 @@ import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import net.fabricmc.fabric.api.command.v2.CommandRegistrationCallback;
 import net.minecraft.command.argument.BlockPosArgumentType;
 import net.minecraft.command.argument.EntityArgumentType;
+import net.minecraft.entity.Entity;
 import net.minecraft.entity.attribute.EntityAttributes;
+import net.minecraft.entity.mob.HostileEntity;
 import net.minecraft.item.ItemStack;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.server.MinecraftServer;
@@ -25,10 +27,7 @@ import net.minecraft.world.World;
 import net.shasankp000.ChatUtils.ChatUtils;
 import net.shasankp000.DangerZoneDetector.DangerZoneDetector;
 import net.shasankp000.Database.QTableExporter;
-import net.shasankp000.Entity.AutoFaceEntity;
-import net.shasankp000.Entity.RayCasting;
-import net.shasankp000.Entity.RespawnHandler;
-import net.shasankp000.Entity.createFakePlayer;
+import net.shasankp000.Entity.*;
 import net.shasankp000.FilingSystem.LLMClientFactory;
 import net.shasankp000.GameAI.BotEventHandler;
 import net.shasankp000.OllamaClient.ollamaClient;
@@ -77,6 +76,11 @@ public class modCommandRegistry {
 
 
     public static void register() {
+        // Register threat debug command
+        CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> {
+            ThreatDebugCommand.register(dispatcher);
+        });
+
         CommandRegistrationCallback.EVENT.register((dispatcher, registryAccess, environment) -> dispatcher.register(
                 literal("bot")
                         .then(literal("spawn")
@@ -169,6 +173,17 @@ public class modCommandRegistry {
                                 )
 
                         )
+                        .then(literal("start_autoface")
+                                .then(CommandManager.argument("bot", EntityArgumentType.player())
+                                        .executes(context -> {
+                                            ServerPlayerEntity bot = EntityArgumentType.getPlayer(context, "bot");
+                                            LOGGER.info("Manually starting autoface for bot: {}", bot.getName().getString());
+                                            AutoFaceEntity.startAutoFace(bot);
+                                            ChatUtils.sendSystemMessage(context.getSource(), "AutoFace started for " + bot.getName().getString());
+                                            return 1;
+                                        })
+                                )
+                        )
 
                         .then(literal("detect_blocks")
                                 .then(CommandManager.argument("bot", EntityArgumentType.player())
@@ -244,6 +259,207 @@ public class modCommandRegistry {
                                                                 )
                                                         )
                                                 )
+                                        )
+                                )
+                        )
+
+                        .then(literal("shoot_arrow")
+                                .then(CommandManager.argument("bot", EntityArgumentType.player())
+                                        .then(CommandManager.argument("debug", StringArgumentType.string())
+                                                .executes(context -> {
+
+                                                    ServerPlayerEntity bot = EntityArgumentType.getPlayer(context, "bot");
+                                                    String debugMode = StringArgumentType.getString(context, "debug");
+                                                    MinecraftServer server = bot.getServer();
+                                                    assert server != null;
+                                                    ServerCommandSource botSource = bot.getCommandSource().withSilent().withMaxLevel(4);
+
+                                                    // Check if bot can shoot (checks entire inventory now, not just equipped)
+                                                    if (!RangedWeaponUtils.hasBowOrCrossbow(bot)) {
+                                                        LOGGER.info("Bot does not have a bow or crossbow to shoot with.");
+                                                        if (debugMode.equals("true")) {
+                                                            ChatUtils.sendChatMessages(botSource, "I don't have a bow or crossbow!");
+                                                        }
+                                                        return 0;
+                                                    }
+
+                                                    // Prepare ammo first (move items to correct slots if needed)
+                                                    String ammoType;
+                                                    if (RangedWeaponUtils.hasCrossbow(bot)) {
+                                                        ammoType = RangedWeaponUtils.prepareCrossbowAmmo(bot, server, botSource);
+                                                        LOGGER.info("Prepared crossbow with ammo: {}", ammoType);
+                                                    } else if (RangedWeaponUtils.hasBow(bot)) {
+                                                        ammoType = RangedWeaponUtils.prepareBowAmmo(bot, server, botSource);
+                                                        LOGGER.info("Prepared bow with ammo: {}", ammoType);
+                                                    } else {
+                                                        ammoType = RangedWeaponUtils.getAmmoType(bot);
+                                                    }
+
+                                                    if (ammoType == null) {
+                                                        if (debugMode.equals("true")) {
+                                                            ChatUtils.sendChatMessages(botSource, "I don't have any arrows or firework rockets!");
+                                                        }
+
+                                                        return 0;
+                                                    }
+
+                                                    // Detect nearby hostile entities AND hostile players within 40 blocks
+                                                    List<Entity> nearbyEntities = AutoFaceEntity.detectNearbyEntities(bot, 40);
+                                                    List<Entity> hostileEntities = nearbyEntities.stream()
+                                                            .filter(entity -> {
+                                                                // Include hostile mobs
+                                                                if (entity instanceof HostileEntity) {
+                                                                    return true;
+                                                                }
+                                                                // Include hostile players (tracked by retaliation system)
+                                                                if (entity instanceof net.minecraft.entity.player.PlayerEntity player &&
+                                                                    !player.getUuid().equals(bot.getUuid())) {
+                                                                    return net.shasankp000.PlayerUtils.PlayerRetaliationTracker.isPlayerHostile(bot, player);
+                                                                }
+                                                                return false;
+                                                            })
+                                                            .toList();
+
+                                                    if (hostileEntities.isEmpty()) {
+                                                        if (debugMode.equals("true")) {
+                                                            ChatUtils.sendChatMessages(botSource, "No hostile entities or players detected within 40 blocks!");
+                                                        }
+
+                                                        return 0;
+                                                    }
+
+                                                    // ✨ INTELLIGENT TARGETING: Use risk analysis to prioritize threats
+                                                    Entity target = selectHighestThreatTarget(bot, hostileEntities, debugMode.equals("true"), botSource);
+
+                                                    if (target == null) {
+                                                        ChatUtils.sendChatMessages(botSource, "No suitable target found for shooting!");
+                                                        return 0;
+                                                    }
+
+                                                    double distance = bot.getPos().distanceTo(target.getPos());
+                                                    String targetName = target.getName().getString();
+
+                                                    if (debugMode.equals("true")) {
+                                                        ChatUtils.sendChatMessages(botSource, "Target acquired: " + targetName + " at " + String.format("%.1f", distance) + " blocks");
+                                                    }
+
+                                                    // Pause autoface to prevent interruption
+                                                    AutoFaceEntity.isShooting = true;
+                                                    LOGGER.info("Paused autoface for shooting");
+
+                                                    // Switch to bow/crossbow if not already equipped
+                                                    int weaponSlot = RangedWeaponUtils.getBowOrCrossbowSlot(bot);
+                                                    if (weaponSlot != -1 && bot.getInventory().selectedSlot != (weaponSlot - 1)) {
+                                                        server.getCommandManager().executeWithPrefix(botSource, "/player " + bot.getName().getString() + " hotbar " + weaponSlot);
+                                                        LOGGER.info("Switched to ranged weapon in slot {}", weaponSlot);
+                                                        // Small delay for weapon switch
+                                                        try {
+                                                            Thread.sleep(100);
+                                                        } catch (InterruptedException e) {
+                                                            LOGGER.error("Weapon switch interrupted");
+                                                        }
+                                                    }
+
+                                                    // Determine projectile speed based on ammo type
+                                                    double projectileSpeed = ammoType.equals("firework") ? 1.5 : 3.0;
+                                                    String ammoTypeName = ammoType.equals("firework") ? "firework rocket" : "arrow";
+
+                                                    // Calculate if target is moving fast
+                                                    boolean isMovingFast = RangedWeaponUtils.isTargetMovingFast(target);
+
+                                                    // ALWAYS use ballistic aim with gravity compensation
+                                                    Vec3d aimPosition;
+                                                    if (isMovingFast) {
+                                                        // Use lead compensation for fast-moving targets
+                                                        aimPosition = RangedWeaponUtils.calculateLeadPosition(target, projectileSpeed);
+                                                        LOGGER.info("Applied lead compensation for fast-moving target");
+                                                    } else {
+                                                        // For stationary targets, aim at center mass (chest height)
+                                                        aimPosition = target.getPos().add(0, target.getHeight() * 0.6, 0);
+                                                    }
+
+                                                    // Calculate ballistic trajectory with gravity compensation
+                                                    float[] aimAngles = RangedWeaponUtils.calculateAimAngles(bot, aimPosition);
+                                                    bot.setYaw(aimAngles[0]);
+                                                    bot.setPitch(aimAngles[1]);
+
+                                                    LOGGER.info("Aiming at {} at distance {} using {} (ballistic trajectory)",
+                                                        targetName, String.format("%.1f", distance), ammoTypeName);
+
+                                                    // Shoot (use item to draw bow/charge crossbow, then release)
+                                                    String weaponName = bot.getMainHandStack().getItem().getName().getString().toLowerCase();
+                                                    boolean isCrossbow = weaponName.contains("crossbow");
+
+                                                    // ⚡ DYNAMIC DRAW TIME: Adjust based on distance to target
+                                                    int drawTime;
+                                                    if (isCrossbow) {
+                                                        drawTime = 25; // Crossbow always full charge
+                                                    } else {
+                                                        // BOW: Calculate optimal draw time for distance
+                                                        drawTime = net.shasankp000.PlayerUtils.WeaponUtils.calculateOptimalDrawTime(distance);
+                                                        projectileSpeed = net.shasankp000.PlayerUtils.WeaponUtils.calculateProjectileSpeed(drawTime);
+
+                                                        LOGGER.info("⚡ Dynamic bow draw time: {} ticks for {}m (speed: {})",
+                                                            drawTime, String.format("%.1f", distance), String.format("%.2f", projectileSpeed));
+                                                    }
+
+                                                    // Set shooting target BEFORE starting to lock autoface onto it
+                                                    AutoFaceEntity.setShootingTarget(target);
+
+                                                    if (debugMode.equals("true")) {
+                                                        ChatUtils.sendChatMessages(botSource, "Shooting target set to " + targetName);
+                                                        ChatUtils.sendChatMessages(botSource, "Drawing " + (isCrossbow ? "crossbow" : "bow") + " with " + ammoTypeName + "...");
+
+                                                    }
+
+                                                    // Start drawing bow/charging crossbow
+                                                    String playerName = bot.getName().getString();
+                                                    server.getCommandManager().executeWithPrefix(botSource, "/player " + playerName + " use continuous");
+                                                    LOGGER.info("Started drawing weapon");
+
+                                                    // Schedule release after draw time
+                                                    Entity finalTarget = target;
+                                                    String finalAmmoType = ammoType;
+                                                    double finalProjectileSpeed = projectileSpeed;
+                                                    scheduler.schedule(() -> {
+                                                        // Re-aim just before releasing (in case target moved)
+                                                        if (finalTarget.isAlive()) {
+                                                            Vec3d finalAimPosition;
+                                                            if (isMovingFast) {
+                                                                // Recalculate lead for moving targets
+                                                                finalAimPosition = RangedWeaponUtils.calculateLeadPosition(finalTarget, finalProjectileSpeed);
+                                                            } else {
+                                                                // Re-aim at center mass for stationary targets
+                                                                finalAimPosition = finalTarget.getPos().add(0, finalTarget.getHeight() * 0.6, 0);
+                                                            }
+                                                            float[] reAimAngles = RangedWeaponUtils.calculateAimAngles(bot, finalAimPosition);
+                                                            bot.setYaw(reAimAngles[0]);
+                                                            bot.setPitch(reAimAngles[1]);
+                                                        }
+
+                                                        // Release arrow/bolt/firework
+                                                        server.getCommandManager().executeWithPrefix(botSource, "/player " + playerName + " use");
+                                                        if (debugMode.equals("true")) {
+                                                            ChatUtils.sendChatMessages(botSource, ammoTypeName.substring(0, 1).toUpperCase() + ammoTypeName.substring(1) + " released at " + targetName + "!");
+                                                        }
+                                                        LOGGER.info("Shot {} at {} from {} blocks away", ammoTypeName, targetName, distance);
+
+                                                        // Clear shooting target after 1 second (no arrow tracking - it causes lag)
+                                                        scheduler.schedule(() -> {
+                                                            AutoFaceEntity.clearShootingTarget();
+                                                            if (debugMode.equals("true")) {
+                                                                ChatUtils.sendChatMessages(botSource, "Shot complete");
+                                                            }
+                                                            LOGGER.info("Shooting complete, autoface resumed");
+
+                                                            // ✅ Signal action completion
+                                                            BotEventHandler.completeAction(playerName);
+                                                        }, 1000, TimeUnit.MILLISECONDS);
+
+                                                    }, drawTime * 50, TimeUnit.MILLISECONDS);
+
+                                                    return 1;
+                                                })
                                         )
                                 )
                         )
@@ -646,6 +862,7 @@ public class modCommandRegistry {
 
 
     private static void spawnBot(CommandContext<ServerCommandSource> context, String spawnMode) {
+        LOGGER.info("========== SPAWNING BOT IN MODE: {} ==========", spawnMode);
 
         MinecraftServer server = context.getSource().getServer(); // gets the minecraft server
         BlockPos spawnPos = getBlockPos(context);
@@ -744,17 +961,30 @@ public class modCommandRegistry {
                         LLMServiceHandler.sendInitialResponse(bot.getCommandSource().withSilent().withMaxLevel(4), llmClient);
 
                         new Thread(() -> {
+                            LOGGER.info("Waiting for LLM Service Handler to initialize...");
+                            int waitCount = 0;
                             while (!LLMServiceHandler.isInitialized) {
                                 try {
                                     Thread.sleep(500L); // Check every 500ms
+                                    waitCount++;
+                                    if (waitCount % 10 == 0) { // Log every 5 seconds
+                                        LOGGER.warn("Still waiting for LLM initialization... ({} seconds)", waitCount / 2);
+                                    }
+                                    if (waitCount > 60) { // 30 second timeout
+                                        LOGGER.error("LLM initialization timeout! Starting AutoFace anyway.");
+                                        AutoFaceEntity.startAutoFace(bot);
+                                        Thread.currentThread().interrupt();
+                                        return;
+                                    }
                                 } catch (InterruptedException e) {
-                                    LOGGER.error("Ollama client initialization interrupted.");
+                                    LOGGER.error("LLM client initialization interrupted.");
                                     Thread.currentThread().interrupt();
                                     break;
                                 }
                             }
 
                             //initialization succeeded, continue:
+                            LOGGER.info("LLM Service Handler initialized! Starting AutoFace...");
                             AutoFaceEntity.startAutoFace(bot);
 
                             Thread.currentThread().interrupt(); // close this thread.
@@ -768,9 +998,21 @@ public class modCommandRegistry {
                         ollamaClient.initializeOllamaClient();
 
                         new Thread(() -> {
+                            LOGGER.info("Waiting for Ollama client to initialize...");
+                            int waitCount = 0;
                             while (!ollamaClient.isInitialized) {
                                 try {
                                     Thread.sleep(500L); // Check every 500ms
+                                    waitCount++;
+                                    if (waitCount % 10 == 0) { // Log every 5 seconds
+                                        LOGGER.warn("Still waiting for Ollama initialization... ({} seconds)", waitCount / 2);
+                                    }
+                                    if (waitCount > 60) { // 30 second timeout
+                                        LOGGER.error("Ollama initialization timeout! Starting AutoFace anyway.");
+                                        AutoFaceEntity.startAutoFace(bot);
+                                        Thread.currentThread().interrupt();
+                                        return;
+                                    }
                                 } catch (InterruptedException e) {
                                     LOGGER.error("Ollama client initialization interrupted.");
                                     Thread.currentThread().interrupt();
@@ -779,6 +1021,7 @@ public class modCommandRegistry {
                             }
 
                             //initialization succeeded, continue:
+                            LOGGER.info("Ollama client initialized! Starting AutoFace...");
                             ollamaClient.sendInitialResponse(bot.getCommandSource().withSilent().withMaxLevel(4));
                             AutoFaceEntity.startAutoFace(bot);
 
@@ -1101,6 +1344,249 @@ public class modCommandRegistry {
         // Set spawn location for the second player
         assert player != null;
         return new BlockPos((int) player.getX() + 5, (int) player.getY(), (int) player.getZ());
+    }
+
+    /**
+     * Intelligently selects the highest threat target from a list of hostile entities.
+     * Uses the same risk calculation system as the bot's combat AI to prioritize targets.
+     *
+     * Priority examples:
+     * - Creeper > Zombie (explosive threat)
+     * - Skeleton > Spider (ranged threat)
+     * - Close enemies > Far enemies (immediate danger)
+     *
+     * @param bot The bot selecting a target
+     * @param hostileEntities List of nearby hostile entities
+     * @param debugMode Whether to print debug messages
+     * @param botSource Command source for chat messages
+     * @return The highest threat entity, or null if none suitable
+     */
+    private static Entity selectHighestThreatTarget(ServerPlayerEntity bot, List<Entity> hostileEntities, boolean debugMode, ServerCommandSource botSource) {
+        if (hostileEntities.isEmpty()) {
+            return null;
+        }
+
+        // Calculate threat for each entity
+        Entity highestThreatEntity = null;
+        double highestThreat = -1.0;
+
+        for (Entity entity : hostileEntities) {
+            double distance = Math.sqrt(entity.squaredDistanceTo(bot));
+
+            // Calculate base threat based on entity type (mobs or players)
+            double baseThreat;
+            if (entity instanceof net.minecraft.entity.player.PlayerEntity player) {
+                // Use player-specific threat calculation (equipment-based)
+                baseThreat = net.shasankp000.PlayerUtils.PlayerRetaliationTracker.getPlayerThreatLevel(bot, player);
+            } else {
+                // Use mob-specific threat calculation
+                baseThreat = calculateBaseThreatForEntity(entity, distance);
+            }
+
+            // Apply distance modifier (closer = more dangerous, but consider ranged threats)
+            // IMPROVED: Better balance between distance and threat type
+            double distanceModifier = 0.0;
+            String entityType = entity.getName().getString().toLowerCase();
+
+            // For creepers and explosive threats, distance is CRITICAL
+            if (entityType.contains("creeper")) {
+                if (distance < 3.0) {
+                    distanceModifier = 50.0; // CRITICAL - about to explode!
+                } else if (distance < 5.0) {
+                    distanceModifier = 30.0; // High danger zone
+                } else if (distance < 8.0) {
+                    distanceModifier = 10.0; // Still dangerous
+                } else {
+                    distanceModifier = -10.0; // Safer at range
+                }
+            }
+            // For ranged attackers, medium distance is most dangerous
+            else if (entityType.contains("skeleton") || entityType.contains("witch") ||
+                     entityType.contains("blaze") || entityType.contains("pillager") ||
+                     (entity instanceof net.minecraft.entity.player.PlayerEntity)) {
+                if (distance < 3.0) {
+                    distanceModifier = 5.0; // Close but manageable
+                } else if (distance < 8.0) {
+                    distanceModifier = 10.0; // Perfect shooting range for them
+                } else if (distance < 15.0) {
+                    distanceModifier = 5.0; // Still accurate
+                } else if (distance < 25.0) {
+                    distanceModifier = 0.0; // Snipe range - equal priority
+                } else {
+                    distanceModifier = -8.0; // Too far to be immediate threat
+                }
+            }
+            // For melee threats, distance is inversely proportional to danger
+            else {
+                if (distance < 2.0) {
+                    distanceModifier = 15.0; // Immediate danger!
+                } else if (distance < 4.0) {
+                    distanceModifier = 10.0; // Very close
+                } else if (distance < 6.0) {
+                    distanceModifier = 5.0; // Close
+                } else if (distance < 10.0) {
+                    distanceModifier = 0.0; // Medium range
+                } else if (distance < 20.0) {
+                    distanceModifier = -5.0; // Lower priority - can handle later
+                } else {
+                    distanceModifier = -10.0; // Very low priority
+                }
+            }
+
+            double totalThreat = baseThreat + distanceModifier;
+
+            if (debugMode) {
+                String entityCategory = entity instanceof net.minecraft.entity.player.PlayerEntity ? "HOSTILE PLAYER" : "MOB";
+                LOGGER.info("Target analysis: {} ({}) at {}m - Base: {}, Distance modifier: {}, Total: {}",
+                    entity.getName().getString(),
+                    entityCategory,
+                    String.format("%.1f", distance),
+                    String.format("%.1f", baseThreat),
+                    String.format("%.1f", distanceModifier),
+                    String.format("%.1f", totalThreat));
+            }
+
+            // Select highest threat
+            if (totalThreat > highestThreat) {
+                highestThreat = totalThreat;
+                highestThreatEntity = entity;
+            }
+        }
+
+        if (highestThreatEntity != null && debugMode) {
+            String targetName = highestThreatEntity.getName().getString();
+            double distance = Math.sqrt(highestThreatEntity.squaredDistanceTo(bot));
+
+            ChatUtils.sendChatMessages(botSource,
+                String.format("§c⚔ Priority Target: §e%s §7(Threat: §c%.1f§7, Distance: §e%.1fm§7)",
+                    targetName, highestThreat, distance));
+
+            // Explain why this target was chosen if there are multiple enemies
+            if (hostileEntities.size() > 1) {
+                String reason = getTargetSelectionReason(highestThreatEntity, distance);
+                ChatUtils.sendChatMessages(botSource, "§7Reason: " + reason);
+            }
+        }
+
+        return highestThreatEntity;
+    }
+
+    /**
+     * Calculates base threat value for an entity based on type and distance.
+     * Higher values = higher priority target.
+     */
+    private static double calculateBaseThreatForEntity(Entity entity, double distance) {
+        String entityType = entity.getName().getString().toLowerCase();
+        double baseThreat = 5.0; // Default threat
+
+        // EXPLOSIVE THREATS - HIGHEST PRIORITY
+        if (entityType.contains("creeper")) {
+            baseThreat = 50.0;
+            if (distance <= 3.0) baseThreat += 30.0; // Critical if in explosion range!
+        }
+
+        // MAXIMUM DANGER MOBS
+        else if (entityType.contains("warden")) {
+            baseThreat = 100.0; // Extreme threat
+        }
+        else if (entityType.contains("ravager")) {
+            baseThreat = 40.0;
+        }
+
+        // RANGED ATTACKERS - HIGH PRIORITY
+        else if (entityType.contains("skeleton") || entityType.contains("stray")) {
+            baseThreat = 20.0;
+        }
+        else if (entityType.contains("witch")) {
+            baseThreat = 25.0; // Potions are dangerous
+        }
+        else if (entityType.contains("blaze")) {
+            baseThreat = 30.0;
+        }
+        else if (entityType.contains("ghast")) {
+            baseThreat = 35.0;
+        }
+        else if (entityType.contains("drowned") && distance > 5.0) {
+            baseThreat = 15.0; // Trident throw
+        }
+        else if (entityType.contains("pillager")) {
+            baseThreat = 18.0;
+        }
+
+        // FLYING THREATS
+        else if (entityType.contains("phantom")) {
+            baseThreat = 22.0;
+        }
+
+        // MELEE THREATS
+        else if (entityType.contains("zombie") || entityType.contains("husk")) {
+            baseThreat = 8.0;
+        }
+        else if (entityType.contains("spider") || entityType.contains("cave_spider")) {
+            baseThreat = 12.0;
+        }
+        else if (entityType.contains("enderman")) {
+            baseThreat = 15.0;
+        }
+        else if (entityType.contains("vindicator")) {
+            baseThreat = 25.0; // High damage
+        }
+        else if (entityType.contains("piglin")) {
+            baseThreat = 10.0;
+        }
+
+        // SPECIAL CASES
+        else if (entityType.contains("slime") || entityType.contains("magma_cube")) {
+            baseThreat = 6.0;
+        }
+        else if (entityType.contains("silverfish")) {
+            baseThreat = 4.0;
+        }
+
+        return baseThreat;
+    }
+
+    /**
+     * Provides a human-readable explanation for why a target was selected.
+     */
+    private static String getTargetSelectionReason(Entity entity, double distance) {
+        // Check if target is a hostile player
+        if (entity instanceof net.minecraft.entity.player.PlayerEntity) {
+            return "§4Hostile player - armed and dangerous!";
+        }
+
+        String entityType = entity.getName().getString().toLowerCase();
+
+        // Explosive threats
+        if (entityType.contains("creeper")) {
+            return "§cExplosive threat - must eliminate immediately!";
+        }
+
+        // Ranged threats
+        if (entityType.contains("skeleton") || entityType.contains("witch") ||
+            entityType.contains("blaze") || entityType.contains("ghast")) {
+            return "§6Ranged attacker - dangerous at distance";
+        }
+
+        // Flying threats
+        if (entityType.contains("phantom")) {
+            return "§bAerial threat - difficult to evade";
+        }
+
+        // Strong melee
+        if (entityType.contains("warden") || entityType.contains("ravager")) {
+            return "§4Extremely dangerous - maximum threat";
+        }
+
+        // Close proximity
+        if (distance < 3.0) {
+            return "§eImmediate danger - very close proximity";
+        } else if (distance < 6.0) {
+            return "§eClose range threat";
+        }
+
+        // Default
+        return "§7Highest calculated threat";
     }
 
 }

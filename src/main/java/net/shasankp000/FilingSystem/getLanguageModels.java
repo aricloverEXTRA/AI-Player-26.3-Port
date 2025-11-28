@@ -5,8 +5,11 @@ import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import net.shasankp000.Exception.ollamaNotReachableException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.net.ConnectException;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.http.HttpClient;
@@ -19,7 +22,15 @@ import java.util.Set;
 
 public class getLanguageModels {
 
-    public static List<String> get() throws ollamaNotReachableException {
+    private static final Logger LOGGER = LoggerFactory.getLogger("getLanguageModels");
+
+    /**
+     * Retrieves available language models from Ollama server.
+     * Returns an empty list if server is not reachable instead of crashing.
+     *
+     * @return List of available model names, or empty list if server is unavailable
+     */
+    public static List<String> get() {
         Set<String> modelSet = new HashSet<>();
 
         try {
@@ -42,14 +53,33 @@ public class getLanguageModels {
                         modelSet.add(modelName);
                     }
                 }
+                LOGGER.info("Successfully retrieved {} language models from Ollama", modelSet.size());
             } else {
-                throw new ollamaNotReachableException("Ollama Server returned status code: " + response.statusCode());
+                LOGGER.warn("Ollama Server returned status code: {}. Model list will be empty.", response.statusCode());
             }
 
+        } catch (ConnectException e) {
+            LOGGER.warn("⚠ Ollama server is not running on localhost:11434. Please start Ollama to use AI chat features.");
+            LOGGER.warn("The mod will continue to work, but AI chat will be unavailable until Ollama is started.");
         } catch (URISyntaxException | IOException | InterruptedException e) {
-            throw new ollamaNotReachableException("Error pinging Ollama Server: " + e.getMessage());
+            LOGGER.error("Error connecting to Ollama Server: {}. Model list will be empty.", e.getMessage());
         }
 
         return new ArrayList<>(modelSet);
+    }
+
+    /**
+     * Safe version that throws exception if server is not reachable.
+     * Use this when you want to explicitly handle the connection failure.
+     *
+     * @return List of available model names
+     * @throws ollamaNotReachableException if server cannot be reached
+     */
+    public static List<String> getOrThrow() throws ollamaNotReachableException {
+        List<String> models = get();
+        if (models.isEmpty()) {
+            throw new ollamaNotReachableException("Ollama server is not reachable or no models are available");
+        }
+        return models;
     }
 }

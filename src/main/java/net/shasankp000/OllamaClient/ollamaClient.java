@@ -6,6 +6,7 @@ import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import io.github.amithkoujalgi.ollama4j.core.OllamaAPI;
 import io.github.amithkoujalgi.ollama4j.core.models.chat.*;
 import io.github.amithkoujalgi.ollama4j.core.types.OllamaModelType;
+import net.shasankp000.OllamaClient.OllamaThinkingResponse;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.command.argument.EntityArgumentType;
 import net.minecraft.server.MinecraftServer;
@@ -148,10 +149,26 @@ public class ollamaClient {
         return NLPProcessor.getIntentionFromLLM(message);
     }
 
+    /**
+     * Pings Ollama server to check if it's reachable.
+     * Returns false instead of crashing if server is not available.
+     *
+     * @return true if server is reachable, false otherwise
+     */
     public static boolean pingOllamaServer() {
-        boolean reachable = ollamaAPI.ping();
-        LOGGER.info("Ollama server alive: {}", reachable);
-        return reachable;
+        try {
+            boolean reachable = ollamaAPI.ping();
+            if (reachable) {
+                LOGGER.info("✓ Ollama server is alive and responding");
+            } else {
+                LOGGER.warn("⚠ Ollama server ping returned false");
+            }
+            return reachable;
+        } catch (Exception e) {
+            LOGGER.warn("⚠ Ollama server is not reachable: {}. AI chat features will be unavailable.", e.getMessage());
+            LOGGER.info("Please ensure Ollama is installed and running on localhost:11434");
+            return false;
+        }
     }
 
     public static void initializeOllamaClient() {
@@ -173,14 +190,25 @@ public class ollamaClient {
 
             while (!success && retries < 3) {
                 try {
-                    OllamaChatRequestModel request = OllamaChatRequestBuilder.getInstance(selectedLM)
-                            .withMessage(OllamaChatMessageRole.SYSTEM, generateSystemPrompt())
-                            .withMessage(OllamaChatMessageRole.USER, "Initializing chat.")
-                            .build();
+                    // Build messages for the new API format
+                    List<OllamaChatMessage> messages = new ArrayList<>();
+                    messages.add(new OllamaChatMessage(OllamaChatMessageRole.SYSTEM, generateSystemPrompt()));
+                    messages.add(new OllamaChatMessage(OllamaChatMessageRole.USER, "Initializing chat."));
 
-                    chatResult = ollamaAPI.chat(request);
-                    initialResponse = chatResult.getResponse();
-                    LOGGER.info("Ollama Client initialized. Initial response: {}", initialResponse);
+                    // Use smart chat that automatically detects reasoning models
+                    OllamaThinkingResponse response = OllamaAPIHelper.smartChat(
+                            ollamaAPI,
+                            host,
+                            selectedLM,
+                            messages
+                    );
+
+                    initialResponse = response.getFullResponse();
+                    LOGGER.info("Ollama Client initialized. Initial response: {}", response.getContent());
+
+                    if (response.hasThinking()) {
+                        LOGGER.info("💭 Model provided thinking: {} chars", response.getThinking().length());
+                    }
 
                     server.execute(() ->
                             server.sendMessage(Text.of("§9" + botName + " is ready!"))

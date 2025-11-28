@@ -1,9 +1,6 @@
 package net.shasankp000.ChatUtils.Helper;
 
 import io.github.amithkoujalgi.ollama4j.core.OllamaAPI;
-import io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatRequestBuilder;
-import io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatRequestModel;
-import io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatResult;
 import io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessageRole;
 import io.github.amithkoujalgi.ollama4j.core.types.OllamaModelType;
 import net.minecraft.server.command.ServerCommandSource;
@@ -277,21 +274,24 @@ public class RAG2 {
 
             // ✨ Final LLM prompt
 
-            OllamaChatRequestModel requestModel = OllamaChatRequestBuilder.getInstance("qwen3:8b")
+            // Use new API helper for thinking mode support
+            List<io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessage> messages = new java.util.ArrayList<>();
+            messages.add(new io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessage(
+                    OllamaChatMessageRole.SYSTEM, buildPrompt()));
+            messages.add(new io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessage(
+                    OllamaChatMessageRole.USER, "Context:\n" + contextBuilder));
+            messages.add(new io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessage(
+                    OllamaChatMessageRole.USER, "User prompt:\n" + userPrompt));
 
-                    .withMessage(OllamaChatMessageRole.SYSTEM, buildPrompt())
+            net.shasankp000.OllamaClient.OllamaThinkingResponse response =
+                    net.shasankp000.OllamaClient.OllamaAPIHelper.smartChat(
+                            ollamaAPI,
+                            "http://localhost:11434",
+                            net.shasankp000.AIPlayer.CONFIG.getSelectedLanguageModel(),
+                            messages
+                    );
 
-                    .withMessage(OllamaChatMessageRole.USER, "Context:\n" + contextBuilder)
-
-                    .withMessage(OllamaChatMessageRole.USER, "User prompt:\n" + userPrompt)
-
-                    .build();
-
-
-
-            OllamaChatResult result = ollamaAPI.chat(requestModel);
-
-            String finalResponse = result.getResponse();
+            String finalResponse = response.getFullResponse();
 
             ollamaClient.processLLMOutput(finalResponse, botSource.getName(), botSource);
 

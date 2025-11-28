@@ -40,6 +40,7 @@ public class State implements Serializable {
     private final double riskAppetite;
     private final List<String> nearbyBlocks;
     private Map<StateActions.Action, Double> podMap = new HashMap<>();
+    private final boolean inDangerousStructure;
 
 
 
@@ -76,6 +77,7 @@ public class State implements Serializable {
         this.riskAppetite = riskAppetite;
         this.nearbyBlocks = nearbyBlocks;
         this.podMap = podMap;
+        this.inDangerousStructure = detectDangerousStructure(nearbyBlocks); // Placeholder logic
     }
 
     // Getters for state variables
@@ -101,6 +103,7 @@ public class State implements Serializable {
     public Map<StateActions.Action, Double> getRiskMap() { return riskMap;}
     public double getRiskAppetite() {return riskAppetite;}
     public Map<StateActions.Action, Double> getPodMap() {return podMap;}
+    public boolean isInDangerousStructure() { return inDangerousStructure; }
 
 
     public void setPodMap(Map<StateActions.Action, Double> podMap) {
@@ -166,6 +169,7 @@ public class State implements Serializable {
                 ", bucketZ =" + botZ +
                 ", nearbyEntities = " + nearbyEntities +
                 ", nearbyBlocks = " + nearbyBlocks +
+                ", inDangerousStructure = " + inDangerousStructure +
                 ", distanceToHostileEntity = " + distanceToHostileEntity +
                 ", distanceToDangerZone = " + distanceToDangerZone +
                 ", botHealth = " + botHealth +
@@ -215,29 +219,28 @@ public class State implements Serializable {
     public static boolean isStateConsistent(State lastState, State currentState) {
         if (lastState == null) return false;
 
-        // Numeric comparison with tolerance
+        // OPTIMIZATION: Check fastest comparisons first (early termination)
+        // Exact match for categorical parameters (very fast)
+        if (!lastState.getTimeOfDay().equals(currentState.getTimeOfDay())) return false;
+        if (!lastState.getDimensionType().equals(currentState.getDimensionType())) return false;
+
+        // Numeric comparison with tolerance (fast)
         boolean distanceToHostileEntitySimilar = Math.abs(lastState.getDistanceToHostileEntity() - currentState.getDistanceToHostileEntity()) <= DISTANCE_TOLERANCE;
         boolean distanceToDangerZoneSimilar = Math.abs(lastState.getDistanceToDangerZone() - currentState.getDistanceToDangerZone()) <= DISTANCE_TOLERANCE;
 
-        // Exact match for categorical parameters
-        boolean timeOfDaySimilar = lastState.getTimeOfDay().equals(currentState.getTimeOfDay());
-        boolean dimensionTypeSimilar = lastState.getDimensionType().equals(currentState.getDimensionType());
-
-        // Overlap check for collections
+        // Overlap check for collections (EXPENSIVE - do last)
         boolean nearbyEntitiesSimilar = calculateEntityOverlap(lastState.getNearbyEntities(), currentState.getNearbyEntities()) >= ENTITY_SIMILARITY_THRESHOLD;
         boolean nearbyBlocksSimilar = calculateBlockOverlap(lastState.getNearbyBlocks(), currentState.getNearbyBlocks()) >= BLOCK_SIMILARITY_THRESHOLD;
 
-
-        System.out.println("distanceToHostileEntitySimilar: " + distanceToHostileEntitySimilar);
-        System.out.println("distanceToDangerZoneSimilar: " + distanceToHostileEntitySimilar);
-        System.out.println("nearByEntitiesSimilar: " + nearbyEntitiesSimilar);
-        System.out.println("nearbyBlockSimilar: " + nearbyBlocksSimilar);
+        // REMOVED println statements - they cause massive lag when called 109 times per tick!
+        // System.out.println("distanceToHostileEntitySimilar: " + distanceToHostileEntitySimilar);
+        // System.out.println("distanceToDangerZoneSimilar: " + distanceToDangerZoneSimilar);
+        // System.out.println("nearByEntitiesSimilar: " + nearbyEntitiesSimilar);
+        // System.out.println("nearbyBlockSimilar: " + nearbyBlocksSimilar);
 
         // Combine all checks
         return distanceToHostileEntitySimilar &&
                 distanceToDangerZoneSimilar &&
-                timeOfDaySimilar &&
-                dimensionTypeSimilar &&
                 nearbyEntitiesSimilar ||
                 nearbyBlocksSimilar;
     }
@@ -248,16 +251,14 @@ public class State implements Serializable {
             return 0.0; // No overlap if block list is empty
         }
 
-        double blockOverlapRatio = 0.0;
-
         // Calculate block similarity overlap
-
         long similarBlocksCount = currentBlocks.stream()
                 .filter(block -> lastBlocks.stream().anyMatch(lastBlock -> lastBlock.contains(block)))
                 .count();
 
-        blockOverlapRatio = (double) similarBlocksCount / Math.max(lastBlocks.size(), currentBlocks.size());
-        System.out.println("Block overlap ratio: " + blockOverlapRatio);
+        double blockOverlapRatio = (double) similarBlocksCount / Math.max(lastBlocks.size(), currentBlocks.size());
+        // REMOVED println - causes lag when called repeatedly
+        // System.out.println("Block overlap ratio: " + blockOverlapRatio);
 
         // Combine both ratios (weighted equally or adjust weights if needed)
         return (blockOverlapRatio) / 2.0; // Average overlap ratio
@@ -286,11 +287,46 @@ public class State implements Serializable {
         // Calculate overlap ratio (based on exact matches)
         double overlapRatio = (double) exactNameMatches / Math.max(lastEntityNames.size(), currentEntityNames.size());
 
-        // Optionally log for debugging
-        System.out.println("Entity name overlap ratio: " + overlapRatio);
+        // REMOVED println - causes massive lag when called 109 times per tick!
+        // System.out.println("Entity name overlap ratio: " + overlapRatio);
 
         return overlapRatio;
     }
 
+
+    /**
+     * Improved structure detection logic: checks dimension and requires a cluster of structure-unique blocks.
+     * This reduces false positives from player builds.
+     */
+    private boolean detectDangerousStructure(List<String> nearbyBlocks) {
+        // Get dimension
+        String dim = this.dimensionType != null ? this.dimensionType : "minecraft:overworld";
+        int fortressBlocks = 0, bastionBlocks = 0, trialBlocks = 0, dungeonBlocks = 0;
+
+        // Count unique structure blocks in the cluster
+        for (String block : nearbyBlocks) {
+            // Nether Fortress: Only in Nether, require at least 3 unique fortress blocks
+            if (dim.contains("nether") && (block.contains("nether_bricks") || block.contains("nether_brick_fence") || block.contains("nether_brick_stairs"))) {
+                fortressBlocks++;
+            }
+            // Bastion Remnant: Only in Nether, require at least 3 unique bastion blocks
+            if (dim.contains("nether") && (block.contains("gilded_blackstone") || block.contains("polished_blackstone_bricks") || block.contains("chiseled_polished_blackstone"))) {
+                bastionBlocks++;
+            }
+            // Trial Chamber: Only in Overworld, require at least 2 unique trial blocks
+            if (dim.contains("overworld") && (block.contains("trial_spawner") || block.contains("copper_bulb") || block.contains("tuff_bricks") || block.contains("chiseled_tuff_bricks"))) {
+                trialBlocks++;
+            }
+            // Dungeon: Only in Overworld, require at least 2 unique dungeon blocks
+            if (dim.contains("overworld") && (block.contains("mossy_cobblestone") || block.contains("spawner"))) {
+                dungeonBlocks++;
+            }
+        }
+        // Require a cluster (not just one block) to reduce false positives
+        if (fortressBlocks >= 3 || bastionBlocks >= 3 || trialBlocks >= 2 || dungeonBlocks >= 2) {
+            return true;
+        }
+        return false;
+    }
 
 }
