@@ -211,11 +211,11 @@ public class WebSearchTool {
                             );
 
                     response = thinkingResponse.getContent();
-                    System.out.println("Generated query: " + response);
+                    logger.info("Generated query: {}", response);
 
                 } catch (IOException | InterruptedException e) {
                     logger.error("Caught exception while creating queries: {} ", (Object) e.getStackTrace());
-                    System.out.println(response);
+                    logger.debug("Response before exception: {}", response);
                     throw new RuntimeException(e);
                 }
 
@@ -280,11 +280,11 @@ public class WebSearchTool {
                         );
 
                 response = thinkingResponse.getContent();
-                System.out.println("Generated query: " + response);
+                logger.info("Generated query: {}", response);
 
             } catch (IOException | InterruptedException e) {
                 logger.error("Caught exception while creating queries: {} ", (Object) e.getStackTrace());
-                System.out.println(response);
+                logger.debug("Response before exception: {}", response);
                 throw new RuntimeException(e);
             }
         }

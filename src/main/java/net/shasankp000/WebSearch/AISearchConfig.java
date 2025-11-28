@@ -20,7 +20,7 @@ public class AISearchConfig {
 
     static {
         if (!AIPlayer.CONFIG.getGeminiKey().isEmpty()) {
-            GEMINI_API_KEY = AIPlayer.CONFIG .getGeminiKey(); // using the same api key for web search purposes as well.
+            GEMINI_API_KEY = AIPlayer.CONFIG.getGeminiKey(); // using the same api key for web search purposes as well.
         }
 
         loadConfig();
@@ -30,16 +30,17 @@ public class AISearchConfig {
         try {
             Path configPath = Paths.get("config", "ai_search_config.json");
             if (!Files.exists(configPath)) {
-                setupIfMissing(); // Auto-create if not found
+                setupIfMissing();
+                return; // No need to load after creation
             }
             String json = Files.readString(configPath);
             ObjectMapper mapper = new ObjectMapper();
             JsonNode node = mapper.readTree(json);
-            GEMINI_API_KEY = node.path("gemini_api_key").asText();
-            SERPER_API_KEY = node.path("serper_api_key").asText();
-            PREFERRED_PROVIDER = node.path("preferred_provider").asText();
-        } catch (Exception e) {
-            System.err.println("❌ Failed to load AI Search config: " + e.getMessage());
+            GEMINI_API_KEY = node.path("gemini_api_key").asText("");
+            SERPER_API_KEY = node.path("serper_api_key").asText("");
+            PREFERRED_PROVIDER = node.path("preferred_provider").asText("gemini");
+        } catch (IOException e) {
+            LOGGER.error("❌ Failed to load AI Search config: {}", e.getMessage());
         }
     }
 
