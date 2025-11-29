@@ -281,12 +281,11 @@ public class ollamaClient {
             if (memories.isEmpty()) {
                 CompletableFuture.runAsync(() -> {
                     try {
-                        List<Double> embedding = ollamaAPI.generateEmbeddings(
-                                OllamaModelType.NOMIC_EMBED_TEXT,
-                                generateSystemPrompt()
-                        );
+                        net.shasankp000.ServiceLLMClients.EmbeddingClient embeddingClient =
+                                net.shasankp000.FilingSystem.EmbeddingClientFactory.createClient();
+                        List<Double> embedding = embeddingClient.generateEmbedding(generateSystemPrompt());
                         SQLiteDB.storeMemory("conversation", generateSystemPrompt(), initialResponse, embedding);
-                        LOGGER.info("✅ Saved initial response.");
+                        LOGGER.info("✅ Saved initial response using {} embeddings.", embeddingClient.getProvider());
                     } catch (Exception e) {
                         LOGGER.error("❌ Failed saving initial response: {}", e.getMessage(), e);
                     }

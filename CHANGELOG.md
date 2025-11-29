@@ -6,6 +6,109 @@
 
 ## November 2025
 
+### Major Features & Improvements
+
+#### Unified Embedding Provider System (Nov 29, 2025)
+**Feature:** Implemented comprehensive multi-provider embedding support for RAG and memory systems with fully automatic provider selection.
+
+**What's New:**
+- **🎯 Fully Automatic Provider Selection:** Embedding system automatically uses the same provider as the main LLM based on JVM arguments (`-Daiplayer.llmMode=<provider>`)
+- **Zero Configuration Required:** Users only need to set their API keys in the config - embedding models are automatically selected
+- **Provider Support:**
+  - ✅ Ollama (nomic-embed-text) - Default fallback
+  - ✅ OpenAI (text-embedding-3-small) - Latest model
+  - ✅ Google Gemini (text-embedding-004) - Latest model
+  - ✅ xAI/Grok (text-embedding-ada-002) - OpenAI-compatible
+  - ✅ Custom Providers (text-embedding-ada-002) - OpenAI-compatible (LM Studio, vLLM, TabbyAPI, etc.)
+  - ⚠️  Anthropic/Claude (no embedding endpoint - auto-fallback to Ollama)
+
+**Benefits:**
+- **No manual configuration needed** - just select your LLM provider and API key
+- **No need to run Ollama** for embeddings when using cloud providers
+- **Automatic endpoint detection** for custom OpenAI-compatible providers
+- **Intelligent fallback** to Ollama if provider doesn't support embeddings or API key is missing
+- **Cost-effective defaults** - uses latest, most efficient embedding models for each provider
+
+**How It Works:**
+1. System reads `aiplayer.llmMode` JVM property (e.g., `openai`, `gemini`, `grok`, `custom`)
+2. Factory automatically selects appropriate embedding endpoint and model
+3. For custom providers, uses the configured endpoint from settings
+4. Falls back to Ollama if provider unavailable or doesn't support embeddings
+
+**Technical Implementation:**
+- `EmbeddingProvider.java` - Base provider with multi-provider support
+- `EmbeddingProviderFactory.java` - Smart factory that reads JVM args and ManualConfig
+- Seamlessly integrates with existing RAG implementation
+- No changes needed in calling code - works transparently
+
+**Configuration:**
+- **Automatic:** Uses `System.getProperty("aiplayer.llmMode")` to determine provider
+- **API Keys:** Read from `ManualConfig` (set via in-game GUI)
+- **Custom Endpoints:** Automatically uses `customApiUrl` from config for custom providers
+- **Zero Touch:** Users never need to manually select embedding models
+
+**Files Added:**
+- `src/main/java/net/shasankp000/AIProviders/EmbeddingProvider.java`
+- `src/main/java/net/shasankp000/AIProviders/EmbeddingProviderFactory.java`
+- `src/main/java/net/shasankp000/ServiceLLMClients/EmbeddingClient.java`
+- `src/main/java/net/shasankp000/ServiceLLMClients/*EmbeddingClient.java` (multiple implementations)
+- `src/main/java/net/shasankp000/FilingSystem/EmbeddingClientFactory.java`
+
+---
+
+#### Reasoning Model Support with Thinking Mode (Nov 29, 2025)
+**Feature:** Added support for reasoning models like DeepSeek-R1 that provide separate "thinking" and "response" outputs.
+
+**What's New:**
+- **Automatic Detection:** Mod detects reasoning models (deepseek-r1, qwen-qwq) and enables thinking mode
+- **Think Parameter:** Uses Ollama's new "think" parameter for compatible models
+- **Response Parsing:** Separates model's reasoning process from final response
+- **Logging:** Tracks thinking output length for debugging
+
+**Supported Models:**
+- DeepSeek-R1
+- Qwen-QwQ
+- Other models with "reasoning" in their name
+
+**API Structure:**
+```json
+{
+  "model": "deepseek-r1",
+  "messages": [...],
+  "think": true,
+  "stream": false
+}
+```
+
+**Response Format:**
+```json
+{
+  "message": {
+    "role": "assistant",
+    "content": "The final answer...",
+    "thinking": "First, I need to analyze..."
+  }
+}
+```
+
+**Technical Implementation:**
+- `OllamaAPIHelper.java` - Helper class for thinking mode support
+- `OllamaThinkingResponse.java` - Response wrapper containing both content and thinking
+- `chatWithThinking()` - Method that enables think parameter
+- `smartChat()` - Auto-detects reasoning models and enables thinking
+- `isReasoningModel()` - Model name detection logic
+
+**Benefits:**
+- Transparent reasoning for complex queries
+- Better debugging of model decision-making
+- Support for latest Ollama reasoning models
+
+**Files Added:**
+- `src/main/java/net/shasankp000/OllamaClient/OllamaAPIHelper.java`
+- `src/main/java/net/shasankp000/OllamaClient/OllamaThinkingResponse.java`
+
+---
+
 ### Critical Bug Fixes
 
 #### DJL PyTorch Path Construction Fix (Nov 24, 2025) - Issue #33

@@ -143,8 +143,6 @@ public class AutoFaceEntity {
         botExecutor.scheduleAtFixedRate(() -> {
             // Run detection and facing logic
 
-//            System.out.println("Is bot moving: " + PathTracer.getBotMovementStatus() + " " + isBotMoving);
-
             if (server != null && server.isRunning() && bot.isAlive()) {
 
                 // ===== PRIORITY: UPDATE EVASION STATUS =====

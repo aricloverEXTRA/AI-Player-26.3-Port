@@ -2,8 +2,9 @@ package net.shasankp000.ChatUtils.Helper;
 
 import io.github.amithkoujalgi.ollama4j.core.OllamaAPI;
 import io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessageRole;
-import io.github.amithkoujalgi.ollama4j.core.types.OllamaModelType;
 import net.minecraft.server.command.ServerCommandSource;
+import net.shasankp000.AIProviders.EmbeddingProvider;
+import net.shasankp000.AIProviders.EmbeddingProviderFactory;
 import net.shasankp000.ChatUtils.ChatUtils;
 import net.shasankp000.ChatUtils.NLPProcessor;
 import net.shasankp000.Database.SQLiteDB;
@@ -25,6 +26,22 @@ public class RAG2 {
     private static final OllamaAPI ollamaAPI = new OllamaAPI("http://localhost:11434");
     private static final Pattern THINK_BLOCK = Pattern.compile("<think>([\\s\\S]*?)</think>");
     private static final int TOP_K = 5;
+    private static EmbeddingProvider embeddingProvider;
+
+    /**
+     * Initialize embedding provider if not already initialized
+     */
+    private static void ensureEmbeddingProvider() {
+        if (embeddingProvider == null) {
+            try {
+                embeddingProvider = EmbeddingProviderFactory.createEmbeddingProvider(ollamaAPI);
+                logger.info("✅ Embedding provider initialized successfully");
+            } catch (Exception e) {
+                logger.error("❌ Failed to initialize embedding provider: {}", e.getMessage(), e);
+                throw new RuntimeException("Failed to initialize embedding provider", e);
+            }
+        }
+    }
 
     private static String buildPrompt() {
         return "You are a context-aware Minecraft player named " + modCommandRegistry.botName + """
@@ -131,7 +148,9 @@ public class RAG2 {
         logger.info("⚡ RAG v2: Running with intent = {} and using provider: {}", intent, client);
 
         try {
-            List<Double> queryEmbedding = ollamaAPI.generateEmbeddings(OllamaModelType.NOMIC_EMBED_TEXT, userPrompt);
+            ensureEmbeddingProvider();
+
+            List<Double> queryEmbedding = embeddingProvider.generateEmbeddings(userPrompt);
 
             StringBuilder contextBuilder = new StringBuilder();
 
@@ -197,8 +216,12 @@ public class RAG2 {
 
 
         try {
+            // Initialize embedding provider if not already done
+            if (embeddingProvider == null) {
+                embeddingProvider = EmbeddingProviderFactory.createEmbeddingProvider(ollamaAPI);
+            }
 
-            List<Double> queryEmbedding = ollamaAPI.generateEmbeddings(OllamaModelType.NOMIC_EMBED_TEXT, userPrompt);
+            List<Double> queryEmbedding = embeddingProvider.generateEmbeddings(userPrompt);
 
 
 

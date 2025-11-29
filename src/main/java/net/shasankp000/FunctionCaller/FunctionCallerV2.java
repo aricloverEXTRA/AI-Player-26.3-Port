@@ -1340,10 +1340,13 @@ public class FunctionCallerV2 {
         try {
             // Generate context synchronously
             String eventContext = generatePromptContext(userInput);
+            // Get embedding client
+            net.shasankp000.ServiceLLMClients.EmbeddingClient embeddingClient =
+                    net.shasankp000.FilingSystem.EmbeddingClientFactory.createClient();
             // Generate event embedding synchronously
-            List<Double> eventEmbedding = ollamaAPI.generateEmbeddings(OllamaModelType.NOMIC_EMBED_TEXT, userInput);
+            List<Double> eventEmbedding = embeddingClient.generateEmbedding(userInput);
             // Generate event context embedding synchronously
-            List<Double> eventContextEmbedding = ollamaAPI.generateEmbeddings(OllamaModelType.NOMIC_EMBED_TEXT, eventContext);
+            List<Double> eventContextEmbedding = embeddingClient.generateEmbedding(eventContext);
             // Wait until functionOutput is a valid string
             while (functionOutput == null || !(functionOutput instanceof String)) {
                 try {
@@ -1355,7 +1358,7 @@ public class FunctionCallerV2 {
             }
             System.out.println("Received output: " + functionOutput);
             // Generate result embedding based on the function output
-            List<Double> resultEmbedding = ollamaAPI.generateEmbeddings(OllamaModelType.NOMIC_EMBED_TEXT, functionOutput);
+            List<Double> resultEmbedding = embeddingClient.generateEmbedding(functionOutput);
             // Create execution record and save it
             ExecutionRecord executionRecord = new ExecutionRecord(executionDateTime, userInput, eventContext, functionOutput, eventEmbedding, eventContextEmbedding, resultEmbedding);
             executionRecord.updateRecords();

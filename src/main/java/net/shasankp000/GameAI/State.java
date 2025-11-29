@@ -6,7 +6,6 @@ import net.shasankp000.PlayerUtils.SelectedItemDetails;
 
 import java.io.Serial;
 import java.io.Serializable;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -35,11 +34,11 @@ public class State implements Serializable {
     private final Map<String, String> armorItems; // Serialized as a map of item names
 
     private final StateActions.Action actionTaken;
-    private List<EntityDetails> nearbyEntities = List.of();
+    private final List<EntityDetails> nearbyEntities;
     private Map<StateActions.Action, Double> riskMap;
     private final double riskAppetite;
     private final List<String> nearbyBlocks;
-    private Map<StateActions.Action, Double> podMap = new HashMap<>();
+    private Map<StateActions.Action, Double> podMap;
     private final boolean inDangerousStructure;
 
 
@@ -189,33 +188,6 @@ public class State implements Serializable {
                 '}';
     }
 
-    public Map<String, Object> toMap() {
-        Map<String, Object> stateMap = new HashMap<>();
-        stateMap.put("botX", getBotX());
-        stateMap.put("botY", getBotY());
-        stateMap.put("botZ", getBotZ());
-        stateMap.put("nearbyEntities", getNearbyEntities());
-        stateMap.put("nearbyBlocks", getNearbyBlocks());
-        stateMap.put("distanceToHostileEntity", getDistanceToHostileEntity());
-        stateMap.put("botHealth", getBotHealth());
-        stateMap.put("distanceToDangerZone", getDistanceToDangerZone());
-        stateMap.put("hotBarItems", getHotBarItems()); // Assuming `getHotBarItems()` returns List<String>
-        stateMap.put("selectedItem", getSelectedItem());
-        stateMap.put("timeOfDay", getTimeOfDay());
-        stateMap.put("dimensionType", getDimensionType());
-        stateMap.put("botHungerLevel", getBotHungerLevel());
-        stateMap.put("botOxygenLevel", getBotOxygenLevel());
-        stateMap.put("botFrostLevel", getFrostLevel());
-        stateMap.put("offhandItem", getOffhandItem()); // Assuming `getOffhandItem()` returns String
-        stateMap.put("armorItems", getArmorItems()); // Assuming `getArmorItems()` returns Map<String, String>
-        stateMap.put("actionTaken", getActionTaken().toString()); // Convert enum to string
-        stateMap.put("riskMap", getRiskMap());
-        stateMap.put("riskAppetite", getRiskAppetite());
-        stateMap.put("podMap", getPodMap());
-        return stateMap;
-    }
-
-
     public static boolean isStateConsistent(State lastState, State currentState) {
         if (lastState == null) return false;
 
@@ -232,11 +204,6 @@ public class State implements Serializable {
         boolean nearbyEntitiesSimilar = calculateEntityOverlap(lastState.getNearbyEntities(), currentState.getNearbyEntities()) >= ENTITY_SIMILARITY_THRESHOLD;
         boolean nearbyBlocksSimilar = calculateBlockOverlap(lastState.getNearbyBlocks(), currentState.getNearbyBlocks()) >= BLOCK_SIMILARITY_THRESHOLD;
 
-        // REMOVED println statements - they cause massive lag when called 109 times per tick!
-        // System.out.println("distanceToHostileEntitySimilar: " + distanceToHostileEntitySimilar);
-        // System.out.println("distanceToDangerZoneSimilar: " + distanceToDangerZoneSimilar);
-        // System.out.println("nearByEntitiesSimilar: " + nearbyEntitiesSimilar);
-        // System.out.println("nearbyBlockSimilar: " + nearbyBlocksSimilar);
 
         // Combine all checks
         return distanceToHostileEntitySimilar &&
@@ -245,52 +212,42 @@ public class State implements Serializable {
                 nearbyBlocksSimilar;
     }
 
-    private static double calculateBlockOverlap( List<String> lastBlocks, List<String> currentBlocks) {
-
-        if (lastBlocks.isEmpty()) {
-            return 0.0; // No overlap if block list is empty
+    private static double calculateBlockOverlap(List<String> lastBlocks, List<String> currentBlocks) {
+        if (lastBlocks.isEmpty() || currentBlocks.isEmpty()) {
+            return 0.0; // No overlap if either list is empty
         }
 
-        // Calculate block similarity overlap
+        // Convert last blocks to a set for O(1) lookup instead of nested streams
+        var lastBlockSet = new java.util.HashSet<>(lastBlocks);
+
+        // Count similar blocks with optimized lookup
         long similarBlocksCount = currentBlocks.stream()
-                .filter(block -> lastBlocks.stream().anyMatch(lastBlock -> lastBlock.contains(block)))
+                .filter(lastBlockSet::contains)
                 .count();
 
-        double blockOverlapRatio = (double) similarBlocksCount / Math.max(lastBlocks.size(), currentBlocks.size());
-        // REMOVED println - causes lag when called repeatedly
-        // System.out.println("Block overlap ratio: " + blockOverlapRatio);
-
-        // Combine both ratios (weighted equally or adjust weights if needed)
-        return (blockOverlapRatio) / 2.0; // Average overlap ratio
+        // Calculate overlap ratio
+        return (double) similarBlocksCount / Math.max(lastBlocks.size(), currentBlocks.size());
     }
 
 
     private static double calculateEntityOverlap(List<EntityDetails> lastEntities, List<EntityDetails> currentEntities) {
-        if (lastEntities.isEmpty()) {
-            return 0.0; // No overlap if one or both lists are empty
+        if (lastEntities.isEmpty() || currentEntities.isEmpty()) {
+            return 0.0; // No overlap if either list is empty
         }
 
-        // Extract names from both entity lists
-        List<String> lastEntityNames = lastEntities.stream()
+        // Convert entity names to a set for O(1) lookup instead of nested streams
+        var lastEntityNameSet = lastEntities.stream()
                 .map(EntityDetails::getName)
-                .toList();
+                .collect(java.util.stream.Collectors.toSet());
 
-        List<String> currentEntityNames = currentEntities.stream()
+        // Count exact name matches with optimized lookup
+        long exactNameMatches = currentEntities.stream()
                 .map(EntityDetails::getName)
-                .toList();
-
-        // Count exact name matches
-        long exactNameMatches = currentEntityNames.stream()
-                .filter(lastEntityNames::contains)
+                .filter(lastEntityNameSet::contains)
                 .count();
 
         // Calculate overlap ratio (based on exact matches)
-        double overlapRatio = (double) exactNameMatches / Math.max(lastEntityNames.size(), currentEntityNames.size());
-
-        // REMOVED println - causes massive lag when called 109 times per tick!
-        // System.out.println("Entity name overlap ratio: " + overlapRatio);
-
-        return overlapRatio;
+        return (double) exactNameMatches / Math.max(lastEntities.size(), currentEntities.size());
     }
 
 
@@ -323,10 +280,7 @@ public class State implements Serializable {
             }
         }
         // Require a cluster (not just one block) to reduce false positives
-        if (fortressBlocks >= 3 || bastionBlocks >= 3 || trialBlocks >= 2 || dungeonBlocks >= 2) {
-            return true;
-        }
-        return false;
+        return fortressBlocks >= 3 || bastionBlocks >= 3 || trialBlocks >= 2 || dungeonBlocks >= 2;
     }
 
 }

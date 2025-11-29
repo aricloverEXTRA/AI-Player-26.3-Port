@@ -8,14 +8,14 @@ import java.util.List;
 import java.util.Set;
 
 import io.github.amithkoujalgi.ollama4j.core.OllamaAPI;
-import io.github.amithkoujalgi.ollama4j.core.exceptions.OllamaBaseException;
 import io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessageRole;
 import io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatRequestBuilder;
 import io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatRequestModel;
 import io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatResult;
-import io.github.amithkoujalgi.ollama4j.core.types.OllamaModelType;
 import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.server.command.ServerCommandSource;
+import net.shasankp000.AIProviders.EmbeddingProvider;
+import net.shasankp000.AIProviders.EmbeddingProviderFactory;
 import net.shasankp000.Database.OldSQLiteDB;
 import net.shasankp000.OllamaClient.ollamaClient;
 import org.slf4j.Logger;
@@ -30,6 +30,22 @@ public class OldRAGImplementation {
     private static final String host = "http://localhost:11434";
     private static final OllamaAPI ollamaAPI = new OllamaAPI(host);
     private static final String DB_URL = "jdbc:sqlite:" + "./sqlite_databases/" + "memory_agent.db";
+    private static EmbeddingProvider embeddingProvider;
+
+    /**
+     * Initialize embedding provider if not already initialized
+     */
+    private static void ensureEmbeddingProvider() {
+        if (embeddingProvider == null) {
+            try {
+                embeddingProvider = EmbeddingProviderFactory.createEmbeddingProvider(ollamaAPI);
+                logger.info("✅ Embedding provider initialized successfully");
+            } catch (Exception e) {
+                logger.error("❌ Failed to initialize embedding provider: {}", e.getMessage(), e);
+                throw new RuntimeException("Failed to initialize embedding provider", e);
+            }
+        }
+    }
 
     public static class Conversation {
         // DS for the SQL return type.
@@ -375,10 +391,11 @@ public class OldRAGImplementation {
 
             for (String query : queryList) {
                 try {
-                    embedding = ollamaAPI.generateEmbeddings(OllamaModelType.NOMIC_EMBED_TEXT, query);
+                    ensureEmbeddingProvider();
+                    embedding = embeddingProvider.generateEmbeddings(query);
                     List<OldRAGImplementation.Conversation> relevantConversations = OldRAGImplementation.findRelevantConversations(embedding, conversationList, 2);
                     relevantConversationSet.addAll(relevantConversations);
-                } catch (IOException | InterruptedException | OllamaBaseException e) {
+                } catch (IOException | InterruptedException e) {
                     LOGGER.error("Caught new exception in fetching relevant conversations: {}", (Object) e.getStackTrace());
                     throw new RuntimeException(e);
                 }
@@ -429,13 +446,12 @@ public class OldRAGImplementation {
             List<Double> embedding;
 
             for (String query : queryList) {
-
-
                 try {
-                    embedding = ollamaAPI.generateEmbeddings(OllamaModelType.NOMIC_EMBED_TEXT, query);
+                    ensureEmbeddingProvider();
+                    embedding = embeddingProvider.generateEmbeddings(query);
                     List<OldRAGImplementation.Event> relevantEvents = OldRAGImplementation.findRelevantEvents(embedding, eventList, 2);
                     relevantEventSet.addAll(relevantEvents);
-                } catch (IOException | InterruptedException | OllamaBaseException e) {
+                } catch (IOException | InterruptedException e) {
                     LOGGER.error("Caught new exception in fetching relevant events: {}", (Object) e.getStackTrace());
                     throw new RuntimeException(e);
                 }
@@ -485,8 +501,10 @@ public class OldRAGImplementation {
         logger.info("⚡ Starting faster RAG task...");
 
         try {
+            ensureEmbeddingProvider();
+
             // 1️⃣ Embed once
-            List<Double> promptEmbedding = ollamaAPI.generateEmbeddings(OllamaModelType.NOMIC_EMBED_TEXT, playerMessage);
+            List<Double> promptEmbedding = embeddingProvider.generateEmbeddings(playerMessage);
 
             // 2️⃣ Fetch from DB
             List<Conversation> allConversations = fetchConversations();
@@ -515,7 +533,7 @@ public class OldRAGImplementation {
             ollamaClient.processLLMOutput(response, botSource.getName(), botSource);
 
             // 6️⃣ Save new conversation
-            List<Double> responseEmbedding = ollamaAPI.generateEmbeddings(OllamaModelType.NOMIC_EMBED_TEXT, response);
+            List<Double> responseEmbedding = embeddingProvider.generateEmbeddings(response);
             OldSQLiteDB.storeConversationWithEmbedding(DB_URL, playerMessage, response, promptEmbedding, responseEmbedding);
 
             logger.info("✅ RAG finished successfully.");
