@@ -5,9 +5,6 @@ import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
 import io.github.amithkoujalgi.ollama4j.core.OllamaAPI;
 import io.github.amithkoujalgi.ollama4j.core.models.chat.*;
-import io.github.amithkoujalgi.ollama4j.core.types.OllamaModelType;
-import net.shasankp000.OllamaClient.OllamaThinkingResponse;
-import net.fabricmc.loader.api.FabricLoader;
 import net.minecraft.command.argument.EntityArgumentType;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.command.ServerCommandSource;
@@ -36,7 +33,6 @@ import java.util.regex.Pattern;
 public class ollamaClient {
 
     public static final Logger LOGGER = LoggerFactory.getLogger("ai-player");
-    private static OllamaChatResult chatResult;
     private static final String host = "http://localhost:11434";
     public static String botName = "";
     public static boolean isInitialized = false;

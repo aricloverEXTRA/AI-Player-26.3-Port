@@ -66,6 +66,37 @@
 
 ---
 
+#### Code Optimization & Bug Fixes (Nov 29, 2025)
+**Feature:** Comprehensive code cleanup and optimization pass to improve performance and maintainability.
+
+**Optimizations:**
+- **Removed Unused Imports:** Cleaned up unused imports across all major classes
+  - Removed `OllamaModelType`, `FabricLoader`, and other unused imports from `ollamaClient.java`
+- **Removed Dead Code:** Eliminated unused variables and methods
+  - Removed unused `chatResult` field from `ollamaClient.java`
+  - Removed deprecated `OldRagImplementation` files
+- **Improved Threading:** All heavy computations now run in dedicated thread pools
+  - RAG2 operations run in separate worker threads
+  - FunctionCallerV2 operations run in separate worker threads
+  - Proper thread naming for easier debugging
+
+**Bug Fixes:**
+- **Linux Path Issue (Issue #30):** Fixed file path handling for Prism Launcher Flatpak installations
+  - Corrected path resolution for `.djl.ai` directory on Linux
+  - Fixed forward slash vs backslash handling across different operating systems
+- **PyTorch Binary Path Issue (Issue #33):** Fixed missing backslash in Windows user directory paths
+  - User reported: Path showed as `C:\Users\Username.djl.ai` instead of `C:\Users\Username\.djl.ai`
+  - Corrected path construction for PyTorch binaries to ensure proper directory structure
+- **Duplicate Class Warnings:** Removed old implementation files causing compile-time warnings
+- **Thread Safety:** Improved synchronization in state management classes
+
+**Performance Improvements:**
+- Reduced memory footprint by removing redundant object allocations
+- Improved startup time by optimizing initialization sequences
+- Better resource cleanup on shutdown
+
+---
+
 #### Reasoning Model Support with Thinking Mode (Nov 29, 2025)
 **Feature:** Added support for reasoning models like DeepSeek-R1 that provide separate "thinking" and "response" outputs.
 
