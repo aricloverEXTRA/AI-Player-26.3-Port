@@ -31,15 +31,9 @@ public class OllamaEmbeddingClient implements EmbeddingClient {
     public List<Double> generateEmbedding(String text) throws Exception {
         try {
             // Use the Ollama4j library to generate embeddings
-            // Try to map model name to OllamaModelType, fallback to NOMIC_EMBED_TEXT
-            OllamaModelType modelType;
-            try {
-                modelType = OllamaModelType.valueOf(modelName.toUpperCase().replace("-", "_"));
-            } catch (IllegalArgumentException e) {
-                LOGGER.debug("Model name '{}' not found in enum, using default NOMIC_EMBED_TEXT", modelName);
-                modelType = OllamaModelType.NOMIC_EMBED_TEXT;
-            }
-            return ollamaAPI.generateEmbeddings(modelType, text);
+            // OllamaModelType is a String constant, not an enum
+            String model = modelName != null && !modelName.isEmpty() ? modelName : OllamaModelType.NOMIC_EMBED_TEXT;
+            return ollamaAPI.generateEmbeddings(model, text);
         } catch (Exception e) {
             LOGGER.error("Error generating Ollama embedding: {}", e.getMessage(), e);
             throw e;

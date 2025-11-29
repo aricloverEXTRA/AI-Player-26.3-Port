@@ -8,17 +8,10 @@ import com.google.gson.stream.JsonReader;
 
 import io.github.amithkoujalgi.ollama4j.core.OllamaAPI;
 
-import io.github.amithkoujalgi.ollama4j.core.exceptions.OllamaBaseException;
-
 import io.github.amithkoujalgi.ollama4j.core.models.chat.*;
 
-import io.github.amithkoujalgi.ollama4j.core.types.OllamaModelType;
-
 import java.io.IOException;
-
 import java.io.StringReader;
-
-import java.sql.SQLException;
 
 import java.util.*;
 
@@ -27,8 +20,6 @@ import java.util.concurrent.*;
 import java.time.format.DateTimeFormatter;
 
 import java.time.LocalDateTime;
-
-import java.util.function.BiFunction;
 
 import java.util.regex.Matcher;
 
@@ -58,7 +49,7 @@ import net.shasankp000.GameAI.BotEventHandler;
 
 import net.shasankp000.GameAI.State;
 
-import net.shasankp000.Database.OldSQLiteDB;
+import net.shasankp000.Database.SQLiteDB;
 
 import net.shasankp000.Entity.AutoFaceEntity;
 
@@ -106,7 +97,7 @@ public class FunctionCallerV2 {
 
     private static final Pattern THINK_BLOCK = Pattern.compile("([\\s\\S]*?)", Pattern.DOTALL);
 
-    private static String selectedLM = AIPlayer.CONFIG.getSelectedLanguageModel();
+    private static final String selectedLM = AIPlayer.CONFIG.getSelectedLanguageModel();
 
     public FunctionCallerV2(ServerCommandSource botSource, UUID playerUUID) {
         FunctionCallerV2.botSource = botSource;
@@ -135,8 +126,9 @@ public class FunctionCallerV2 {
 
         private void updateRecords() {
             try {
-                OldSQLiteDB.storeEventWithEmbedding(DB_URL, this.command, this.context, this.result, this.eventEmbedding, this.eventContextEmbedding, this.eventResultEmbedding);
-            } catch (SQLException e) {
+                // Store command as memory with prompt=command, response=result
+                SQLiteDB.storeMemory("function_call", this.command, this.result, this.eventEmbedding);
+            } catch (Exception e) {
                 logger.error("Caught exception: {} ", (Object) e.getStackTrace());
                 throw new RuntimeException(e);
             }
@@ -213,7 +205,7 @@ public class FunctionCallerV2 {
                 return;
             }
             // Take the first entity found
-            var target = entities.get(0);
+            var target = entities.getFirst();
             LookController.faceEntity(bot, target);
             getFunctionOutput("Facing entity: " + target.getName().getString());
         }
@@ -275,7 +267,7 @@ public class FunctionCallerV2 {
                                 new BlockPos(targetX, targetY, targetZ)
                         ).get();
                     } catch (Exception e) {
-                        e.printStackTrace();
+                        logger.error("Failed to mine block: {}", e.getMessage(), e);
                         return "⚠️ Failed to mine block: " + e.getMessage();
                     }
                 });
@@ -319,8 +311,7 @@ public class FunctionCallerV2 {
 
     private static String toolBuilder() {
         var gson = new Gson();
-        List<Map<String, Object>> functions = ToolRegistry.TOOLS.stream().map(tool -> {
-            return Map.of(
+        List<Map<String, Object>> functions = ToolRegistry.TOOLS.stream().map(tool -> Map.of(
                     "name", tool.name(),
                     "description", tool.description(),
                     "parameters", tool.parameters().stream().map(param -> Map.of(
@@ -328,8 +319,7 @@ public class FunctionCallerV2 {
                             "description", param.description(),
                             "required", true
                     )).toList()
-            );
-        }).toList();
+            )).toList();
         return gson.toJson(Map.of("functions", functions));
     }
 
@@ -339,8 +329,8 @@ public class FunctionCallerV2 {
             You are a first-principles reasoning **function-caller AI agent** for a Minecraft bot.
             
             You will be provided with additional context information of the minecraft bot you are controlling. Use that information well to carefully plan your approach.
-            
-            Your role is to analyze player prompts carefully and decide which tool or sequence of tools best accomplishes the task. 
+
+            Your role is to analyze player prompts carefully and decide which tool or sequence of tools best accomplishes the task.
             You must output your decision strictly as JSON, following the required schema.
             
             ---
@@ -551,7 +541,6 @@ public class FunctionCallerV2 {
         Remember that if you generate incorrect context then the bot will not be able to understand what the user has asked of it.
         \s
         \s""";
-        OllamaChatRequestBuilder builder = OllamaChatRequestBuilder.getInstance(selectedLM);
         try {
             List<OllamaChatMessage> messages = new java.util.ArrayList<>();
             messages.add(new OllamaChatMessage(OllamaChatMessageRole.SYSTEM, sysPrompt));
@@ -579,13 +568,13 @@ public class FunctionCallerV2 {
 
         Object direction = SharedStateUtils.getValue(sharedState, "facing.direction");
         if (direction != null) {
-            sb.append("- Facing: ").append(String.valueOf(direction));
+            sb.append("- Facing: ").append(direction);
             Object facing = SharedStateUtils.getValue(sharedState, "facing.facing");
             if (facing != null) {
-                sb.append(" (").append(String.valueOf(facing));
+                sb.append(" (").append(facing);
                 Object axis = SharedStateUtils.getValue(sharedState, "facing.axis");
                 if (axis != null) {
-                    sb.append(", axis: ").append(String.valueOf(axis));
+                    sb.append(", axis: ").append(axis);
                 }
                 sb.append(")");
             }
@@ -634,7 +623,6 @@ public class FunctionCallerV2 {
 
     public static void run(String userPrompt) {
         ollamaAPI.setRequestTimeoutSeconds(600);
-        OllamaChatRequestBuilder builder = OllamaChatRequestBuilder.getInstance(selectedLM);
         String systemPrompt = FunctionCallerV2.buildPrompt(toolBuilder());
         String response;
         State initialState = BotEventHandler.createInitialState(botSource.getPlayer());
@@ -642,10 +630,7 @@ public class FunctionCallerV2 {
         map.updateMap();
         // If method returns Map<String, String>
         Map<String, String> surroundingsStr = map.summarizeSurroundings();
-        Map<String, Object> surroundings = new HashMap<>();
-        for (Map.Entry<String, String> entry : surroundingsStr.entrySet()) {
-            surroundings.put(entry.getKey(), entry.getValue());
-        }
+        Map<String, Object> surroundings = new HashMap<>(surroundingsStr);
 
         String botContext = buildLLMBotContext(initialState, sharedState, surroundings);
         String fullSystemPrompt = systemPrompt + "\n\nBot's context information:\n" + botContext;
@@ -1344,9 +1329,16 @@ public class FunctionCallerV2 {
             net.shasankp000.ServiceLLMClients.EmbeddingClient embeddingClient =
                     net.shasankp000.FilingSystem.EmbeddingClientFactory.createClient();
             // Generate event embedding synchronously
-            List<Double> eventEmbedding = embeddingClient.generateEmbedding(userInput);
-            // Generate event context embedding synchronously
-            List<Double> eventContextEmbedding = embeddingClient.generateEmbedding(eventContext);
+            List<Double> eventEmbedding;
+            List<Double> eventContextEmbedding;
+            try {
+                eventEmbedding = embeddingClient.generateEmbedding(userInput);
+                // Generate event context embedding synchronously
+                eventContextEmbedding = embeddingClient.generateEmbedding(eventContext);
+            } catch (Exception e) {
+                logger.error("Failed to generate embeddings", e);
+                throw new RuntimeException(e);
+            }
             // Wait until functionOutput is a valid string
             while (functionOutput == null || !(functionOutput instanceof String)) {
                 try {
@@ -1358,14 +1350,20 @@ public class FunctionCallerV2 {
             }
             System.out.println("Received output: " + functionOutput);
             // Generate result embedding based on the function output
-            List<Double> resultEmbedding = embeddingClient.generateEmbedding(functionOutput);
+            List<Double> resultEmbedding;
+            try {
+                resultEmbedding = embeddingClient.generateEmbedding(functionOutput);
+            } catch (Exception e) {
+                logger.error("Failed to generate result embedding", e);
+                throw new RuntimeException(e);
+            }
             // Create execution record and save it
             ExecutionRecord executionRecord = new ExecutionRecord(executionDateTime, userInput, eventContext, functionOutput, eventEmbedding, eventContextEmbedding, resultEmbedding);
             executionRecord.updateRecords();
             // Clear the functionOutput to reset state
             functionOutput = null;
             System.out.println("Event data saved successfully.");
-        } catch (IOException | OllamaBaseException | InterruptedException e) {
+        } catch (Exception e) {
             // Log or handle the exception
             logger.error("Error occurred while processing the function result: ", e);
             throw new RuntimeException(e);

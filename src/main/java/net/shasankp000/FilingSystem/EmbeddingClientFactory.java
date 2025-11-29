@@ -24,7 +24,7 @@ public class EmbeddingClientFactory {
      * @return An EmbeddingClient instance for the configured provider
      */
     public static EmbeddingClient createClient() {
-        String mode = AIPlayer.CONFIG.getSelectedProvider();
+        String mode = System.getProperty("aiplayer.llmMode", "ollama");
 
         // Return cached client if mode hasn't changed
         if (cachedClient != null && mode.equals(cachedMode)) {
@@ -244,7 +244,7 @@ public class EmbeddingClientFactory {
      */
     public static void validateConfiguration() {
         try {
-            String mode = AIPlayer.CONFIG.getSelectedProvider();
+            String mode = System.getProperty("aiplayer.llmMode", "ollama");
             LOGGER.info("═══════════════════════════════════════════════════════");
             LOGGER.info("🔧 Validating Embedding Configuration");
             LOGGER.info("═══════════════════════════════════════════════════════");

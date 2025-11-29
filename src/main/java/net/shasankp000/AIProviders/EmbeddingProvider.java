@@ -46,7 +46,7 @@ public class EmbeddingProvider {
      */
     public EmbeddingProvider(OllamaAPI ollamaAPI, String embeddingModel) {
         this.ollamaAPI = ollamaAPI;
-        this.baseUrl = ollamaAPI.getHost();
+        this.baseUrl = "http://localhost:11434";
         this.apiKey = null;
         this.embeddingModel = embeddingModel;
         this.providerType = AIProviderType.OLLAMA;
