@@ -47,8 +47,18 @@
 - **Custom Endpoints:** Automatically uses `customApiUrl` from config for custom providers
 - **Zero Touch:** Users never need to manually select embedding models
 
+**Automatic Fallback System:**
+- ✅ **Smart Fallback:** Automatically falls back to Ollama if cloud provider fails
+- ✅ **No Interruption:** Game continues working seamlessly during fallback
+- ✅ **Cost Savings:** Use cloud LLM for chat but local Ollama for embeddings (free!)
+- ✅ **Triggers:** Missing API key, network errors, rate limits, unsupported providers
+- ✅ **Logging:** Clear warnings when fallback occurs for troubleshooting
+
 **Files Added:**
-- `src/main/java/net/shasankp000/AIProviders/EmbeddingProvider.java`
+- `src/main/java/net/shasankp000/Managers/EmbeddingProviderFactory.java` - Smart factory with automatic fallback
+- `src/main/java/net/shasankp000/Managers/EmbeddingProvider.java` - Unified provider interface
+- `EMBEDDING_SYSTEM_OVERVIEW.md` - Complete architecture documentation
+- `EMBEDDING_QUICKSTART.md` - User-friendly quick start guide
 - `src/main/java/net/shasankp000/AIProviders/EmbeddingProviderFactory.java`
 - `src/main/java/net/shasankp000/ServiceLLMClients/EmbeddingClient.java`
 - `src/main/java/net/shasankp000/ServiceLLMClients/*EmbeddingClient.java` (multiple implementations)

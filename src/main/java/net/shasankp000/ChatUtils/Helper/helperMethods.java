@@ -31,30 +31,6 @@ public class helperMethods {
         return conversationTime.isAfter(currentTime.minusHours(1));
     }
 
-    public static double findMaxSimilarityConversations(Set<OldRAGImplementation.Conversation> conversationSet) {
-        double maxSimilarity = Double.MIN_VALUE;
-
-        for (OldRAGImplementation.Conversation conversation : conversationSet) {
-            if (conversation.similarity > maxSimilarity) {
-                maxSimilarity = conversation.similarity;
-            }
-        }
-
-        return maxSimilarity;
-    }
-
-    public static double findMaxSimilarityEvents(Set<OldRAGImplementation.Event> eventSet) {
-        double maxSimilarity = Double.MIN_VALUE;
-
-        for (OldRAGImplementation.Event event : eventSet) {
-            if (event.similarity > maxSimilarity) {
-                maxSimilarity = event.similarity;
-            }
-        }
-
-        return maxSimilarity;
-    }
-
 
     public static boolean isHighSimilarity(double similarityScore, double maxSimilarity) {
         return similarityScore == maxSimilarity;

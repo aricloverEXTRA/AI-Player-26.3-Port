@@ -140,53 +140,96 @@ public class EmbeddingProviderFactory {
                 return "nomic-embed-text"; // Fallback to Ollama default
         }
     }
-}
 
     /**
-     * Create an embedding provider with a custom model
+     * Create an embedding provider with a custom model.
+     * This overloaded method allows specifying a custom embedding model
+     * instead of using the default for the provider.
+     *
+     * @param ollamaAPI Ollama API instance (used as fallback)
+     * @param customEmbeddingModel Custom embedding model name to use
+     * @return Configured EmbeddingProvider with custom model
      */
     public static EmbeddingProvider createEmbeddingProvider(OllamaAPI ollamaAPI, String customEmbeddingModel) {
         try {
-            String provider = ConfigManager.getAIProvider();
+            String provider = System.getProperty("aiplayer.llmMode", "ollama");
+            LOGGER.info("🔍 Creating embedding provider for: {} with custom model: {}", provider, customEmbeddingModel);
+
+            String apiKey;
+            String endpoint;
 
             switch (provider.toLowerCase()) {
                 case "ollama":
+                    LOGGER.info("✅ Using Ollama with custom embedding model: {}", customEmbeddingModel);
                     return new EmbeddingProvider(ollamaAPI, customEmbeddingModel);
 
                 case "openai":
-                case "lmstudio":
-                case "vllm":
-                case "tabbyapi":
+                    apiKey = AIPlayer.CONFIG.getOpenAIKey();
+                    if (apiKey == null || apiKey.isEmpty()) {
+                        LOGGER.warn("⚠ OpenAI API key not configured, falling back to Ollama");
+                        return new EmbeddingProvider(ollamaAPI, customEmbeddingModel);
+                    }
+                    LOGGER.info("✅ Using OpenAI with custom embedding model: {}", customEmbeddingModel);
                     return new EmbeddingProvider(
-                            ConfigManager.getCustomEndpoint(),
-                            ConfigManager.getAPIKey(),
+                            "https://api.openai.com",
+                            apiKey,
                             customEmbeddingModel,
                             EmbeddingProvider.AIProviderType.OPENAI_COMPATIBLE
                     );
 
                 case "gemini":
+                    apiKey = AIPlayer.CONFIG.getGeminiKey();
+                    if (apiKey == null || apiKey.isEmpty()) {
+                        LOGGER.warn("⚠ Gemini API key not configured, falling back to Ollama");
+                        return new EmbeddingProvider(ollamaAPI, customEmbeddingModel);
+                    }
+                    LOGGER.info("✅ Using Gemini with custom embedding model: {}", customEmbeddingModel);
                     return new EmbeddingProvider(
                             "https://generativelanguage.googleapis.com",
-                            ConfigManager.getAPIKey(),
+                            apiKey,
                             customEmbeddingModel,
                             EmbeddingProvider.AIProviderType.GEMINI
                     );
 
-                case "mistral":
+                case "grok":
+                    apiKey = AIPlayer.CONFIG.getGrokKey();
+                    if (apiKey == null || apiKey.isEmpty()) {
+                        LOGGER.warn("⚠ Grok API key not configured, falling back to Ollama");
+                        return new EmbeddingProvider(ollamaAPI, customEmbeddingModel);
+                    }
+                    LOGGER.info("✅ Using Grok with custom embedding model: {}", customEmbeddingModel);
                     return new EmbeddingProvider(
-                            "https://api.mistral.ai",
-                            ConfigManager.getAPIKey(),
+                            "https://api.x.ai",
+                            apiKey,
                             customEmbeddingModel,
-                            EmbeddingProvider.AIProviderType.MISTRAL
+                            EmbeddingProvider.AIProviderType.OPENAI_COMPATIBLE
                     );
 
-                case "cohere":
+                case "custom":
+                    endpoint = AIPlayer.CONFIG.getCustomApiUrl();
+                    apiKey = AIPlayer.CONFIG.getCustomApiKey();
+
+                    if (endpoint == null || endpoint.isEmpty()) {
+                        LOGGER.warn("⚠ Custom endpoint not configured, falling back to Ollama");
+                        return new EmbeddingProvider(ollamaAPI, customEmbeddingModel);
+                    }
+
+                    if (apiKey == null) {
+                        apiKey = "";
+                    }
+
+                    LOGGER.info("✅ Using custom endpoint with custom embedding model: {}", customEmbeddingModel);
                     return new EmbeddingProvider(
-                            "https://api.cohere.ai",
-                            ConfigManager.getAPIKey(),
+                            endpoint,
+                            apiKey,
                             customEmbeddingModel,
-                            EmbeddingProvider.AIProviderType.COHERE
+                            EmbeddingProvider.AIProviderType.OPENAI_COMPATIBLE
                     );
+
+                case "claude":
+                case "anthropic":
+                    LOGGER.warn("⚠ Anthropic/Claude does not provide embedding endpoints, falling back to Ollama");
+                    return new EmbeddingProvider(ollamaAPI, customEmbeddingModel);
 
                 default:
                     LOGGER.warn("⚠ Unknown provider '{}', falling back to Ollama", provider);
