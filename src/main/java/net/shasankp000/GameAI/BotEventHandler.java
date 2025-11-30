@@ -1736,5 +1736,26 @@ public class BotEventHandler {
         }
         return true;
     }
+
+    /**
+     * Get the RLAgent instance for the given bot
+     * This creates a new RLAgent with the current state
+     */
+    public static RLAgent getRLAgent(ServerPlayerEntity bot) {
+        if (currentState == null) {
+            currentState = new State(bot, server);
+        }
+        return new RLAgent(currentState, DEFAULT_RISK_APPETITE);
+    }
+
+    /**
+     * Get the current State for the given bot
+     */
+    public static State getCurrentState(ServerPlayerEntity bot) {
+        if (currentState == null) {
+            currentState = new State(bot, server);
+        }
+        return currentState;
+    }
 }
 

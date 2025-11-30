@@ -1,4 +1,4 @@
-rpackage net.shasankp000.GameAI.planner;
+package net.shasankp000.GameAI.planner;
 
 import java.util.HashMap;
 import java.util.Map;

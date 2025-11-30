@@ -2007,6 +2007,14 @@ public class RLAgent {
     }
 
     /**
+     * Get the current state for a bot.
+     * Creates a new State from the bot's current status.
+     */
+    public State getCurrentState(net.minecraft.server.network.ServerPlayerEntity bot) {
+        return new State(bot, bot.getServer());
+    }
+
+    /**
      * Risk estimate data structure for planner.
      */
     public static class RiskEstimate {

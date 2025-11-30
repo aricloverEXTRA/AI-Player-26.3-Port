@@ -64,12 +64,12 @@ public class Planner {
 
             beam = selectTopPlans(neighbors, BEAM_WIDTH);
 
-            if (beam.get(0).getTotalScore() < SAFE_THRESHOLD) {
+            if (beam.getFirst().getTotalScore() < SAFE_THRESHOLD) {
                 break;
             }
         }
 
-        Plan bestPlan = beam.get(0);
+        Plan bestPlan = beam.getFirst();
 
         if (bestPlan.getTotalScore() < SAFE_THRESHOLD * 4) {
             return bestPlan;

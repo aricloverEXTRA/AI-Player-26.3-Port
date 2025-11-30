@@ -145,13 +145,13 @@ public class MarkovChain2 {
                 candidates.addAll(Arrays.asList((byte)10, (byte)11, (byte)12)); // attack, shoot, shield
                 break;
             case 5: // eat_food
-                candidates.addAll(Arrays.asList((byte)22)); // eat
+                candidates.add((byte)22); // eat
                 break;
             case 6: // craft_weapon
-                candidates.addAll(Arrays.asList((byte)24)); // craft
+                candidates.add((byte)24); // craft
                 break;
             case 7: // equip_armor
-                candidates.addAll(Arrays.asList((byte)23)); // equip_armor
+                candidates.add((byte)23); // equip_armor
                 break;
             default:
                 // Fallback: all movement actions
@@ -211,7 +211,7 @@ public class MarkovChain2 {
                     item.contains("log") || item.contains("wood") || item.contains("planks"));
             case 4: // kill_hostile
                 // Check if no more hostiles nearby
-                return state.getNearbyEntities().stream().noneMatch(e -> e.isHostile());
+                return state.getNearbyEntities().stream().noneMatch(net.shasankp000.Entity.EntityDetails::isHostile);
             case 5: // eat_food
                 // Check if hunger restored
                 return state.getBotHungerLevel() >= 18;
@@ -262,7 +262,7 @@ public class MarkovChain2 {
 
     // Helper methods for state analysis
     private long getHostileCount(State state) {
-        return state.getNearbyEntities().stream().filter(e -> e.isHostile()).count();
+            return state.getNearbyEntities().stream().filter(net.shasankp000.Entity.EntityDetails::isHostile).count();
     }
 
     private long getNeutralCount(State state) {
@@ -271,7 +271,7 @@ public class MarkovChain2 {
 
     private double getClosestHostileDistance(State state) {
         return state.getNearbyEntities().stream()
-            .filter(e -> e.isHostile())
+                .filter(net.shasankp000.Entity.EntityDetails::isHostile)
             .mapToDouble(e -> Math.sqrt(
                 Math.pow(e.getX() - state.getBotX(), 2) +
                         Math.pow(e.getZ() - state.getBotZ(), 2)

@@ -486,6 +486,59 @@ public class modCommandRegistry {
                                 )
                         )
 
+                        .then(literal("plan")
+                                .then(CommandManager.argument("bot", EntityArgumentType.player())
+                                        .then(CommandManager.argument("goal", StringArgumentType.greedyString())
+                                                .executes(context -> {
+                                                    ServerPlayerEntity bot = EntityArgumentType.getPlayer(context, "bot");
+                                                    String goal = StringArgumentType.getString(context, "goal");
+                                                    MinecraftServer server = bot.getServer();
+                                                    assert server != null;
+                                                    ServerCommandSource botSource = bot.getCommandSource().withSilent().withMaxLevel(4);
+
+                                                    // Initialize planner if not already done
+                                                    net.shasankp000.GameAI.RLAgent rlAgent = BotEventHandler.getRLAgent(bot);
+                                                    if (rlAgent == null) {
+                                                        LOGGER.error("RLAgent not initialized for bot {}", bot.getName().getString());
+                                                        ChatUtils.sendChatMessages(botSource, "Error: AI system not ready");
+                                                        return 0;
+                                                    }
+
+                                                    net.shasankp000.FunctionCaller.FunctionCallerV2.initializePlanner(bot, rlAgent);
+
+                                                    // Get current state
+                                                    net.shasankp000.GameAI.State currentState = rlAgent.getCurrentState(bot);
+
+                                                    // Send initial feedback
+                                                    ChatUtils.sendChatMessages(botSource, "Planning: " + goal + "...");
+
+                                                    // Execute plan asynchronously
+                                                    net.shasankp000.FunctionCaller.FunctionCallerV2.handleUserGoal(goal, currentState, bot, rlAgent)
+                                                            .thenAccept(success -> {
+                                                                server.execute(() -> {
+                                                                    if (success) {
+                                                                        ChatUtils.sendChatMessages(botSource, "✓ Plan executed successfully!");
+                                                                        LOGGER.info("[planner] ✓ Goal '{}' completed", goal);
+                                                                    } else {
+                                                                        ChatUtils.sendChatMessages(botSource, "✗ Plan execution failed");
+                                                                        LOGGER.warn("[planner] ✗ Goal '{}' failed", goal);
+                                                                    }
+                                                                });
+                                                            })
+                                                            .exceptionally(ex -> {
+                                                                server.execute(() -> {
+                                                                    ChatUtils.sendChatMessages(botSource, "Error: " + ex.getMessage());
+                                                                    LOGGER.error("[planner] Exception during goal execution", ex);
+                                                                });
+                                                                return null;
+                                                            });
+
+                                                    return 1;
+                                                })
+                                        )
+                                )
+                        )
+
                         .then(literal("mine_block")
                                 .then(CommandManager.argument("bot", EntityArgumentType.player())
                                         .then(CommandManager.argument("block_type", StringArgumentType.string())

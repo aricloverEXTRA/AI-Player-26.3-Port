@@ -102,10 +102,91 @@ public class FunctionCallerV2 {
 
     private static final String selectedLM = AIPlayer.CONFIG.getSelectedLanguageModel();
 
+    // Markov Planner components (initialized on first use)
+    private static Planner planner = null;
+    private static ActionLogWriter actionLogWriter = null;
+    private static MarkovChain2 markovChain = null;
+    private static final double SAFE_THRESHOLD = 50.0;
+
     public FunctionCallerV2(ServerCommandSource botSource, UUID playerUUID) {
         FunctionCallerV2.botSource = botSource;
         ollamaAPI.setRequestTimeoutSeconds(90);
         FunctionCallerV2.playerUUID = playerUUID;
+    }
+
+    /**
+     * Initialize the Markov planner system.
+     * Should be called once during bot initialization.
+     */
+    public static void initializePlanner(ServerPlayerEntity bot, net.shasankp000.GameAI.RLAgent rlAgent) {
+        if (markovChain == null) {
+            logger.info("[planner] Initializing Markov-based planner system...");
+            markovChain = new MarkovChain2();
+            planner = new Planner(markovChain, rlAgent, bot);
+            actionLogWriter = new ActionLogWriter(markovChain, bot);
+            logger.info("[planner] ✓ Planner system initialized");
+        }
+    }
+
+    /**
+     * Handle a natural language goal using the Markov planner.
+     * Falls back to LLM-based planning if the Markov planner fails.
+     *
+     * @param naturalLanguageGoal User's goal in natural language (e.g., "get some wood")
+     * @param currentState Current bot state
+     * @param bot Bot entity
+     * @param rlAgent RL agent for state management
+     * @return CompletableFuture that completes when plan execution finishes
+     */
+    public static CompletableFuture<Boolean> handleUserGoal(
+            String naturalLanguageGoal,
+            State currentState,
+            ServerPlayerEntity bot,
+            net.shasankp000.GameAI.RLAgent rlAgent) {
+
+        // Ensure planner is initialized
+        if (planner == null) {
+            initializePlanner(bot, rlAgent);
+        }
+
+        // Parse goal using GoalMapper
+        short goalId = GoalMapper.parseGoal(naturalLanguageGoal);
+
+        if (goalId == 0) {
+            logger.warn("[planner] Unknown goal: '{}', falling back to LLM", naturalLanguageGoal);
+            return fallbackToLLM(naturalLanguageGoal, currentState);
+        }
+
+        String goalName = GoalMapper.getGoalName(goalId);
+        logger.info("[planner] Parsed goal '{}' → ID {} ({})", naturalLanguageGoal, goalId, goalName);
+
+        // Try Markov planner first
+        Plan plan = planner.buildPlan(currentState, goalId);
+
+        if (plan != null && plan.getTotalScore() < SAFE_THRESHOLD * 4) {
+            logger.info("[planner] ✓ Using Markov planner for goal '{}' (score: {})",
+                    goalName, plan.getTotalScore());
+            return executePlan(plan, actionLogWriter, currentState);
+        } else {
+            if (plan == null) {
+                logger.warn("[planner] Markov planner returned null for goal '{}', falling back to LLM", goalName);
+            } else {
+                logger.warn("[planner] Markov planner score too high ({}) for goal '{}', falling back to LLM",
+                        plan.getTotalScore(), goalName);
+            }
+            return fallbackToLLM(naturalLanguageGoal, currentState);
+        }
+    }
+
+    /**
+     * Fallback to LLM-based planning when Markov planner fails.
+     * TODO: Implement LLM-based pipeline generation
+     */
+    private static CompletableFuture<Boolean> fallbackToLLM(String goal, State currentState) {
+        logger.info("[planner] LLM fallback for goal: '{}'", goal);
+        // TODO: Integrate with existing LLM-based function calling system
+        // For now, return failure
+        return CompletableFuture.completedFuture(false);
     }
 
     private static class ExecutionRecord {

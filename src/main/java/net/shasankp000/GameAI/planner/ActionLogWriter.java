@@ -1,7 +1,6 @@
 package net.shasankp000.GameAI.planner;
 
 import net.minecraft.server.network.ServerPlayerEntity;
-import net.shasankp000.GameAI.RLAgent;
 import net.shasankp000.GameAI.State;
 import net.shasankp000.GameAI.StateActions;
 import net.shasankp000.GameAI.StateTransition;
@@ -22,11 +21,11 @@ public class ActionLogWriter {
     private static final ExecutorService ASYNC_EXECUTOR = Executors.newFixedThreadPool(2);
 
     private final MarkovChain2 markovChain;
-    private final StateTransition.TransitionHistory transitionHistory;
+    private final ServerPlayerEntity bot;
 
-    public ActionLogWriter(MarkovChain2 markovChain, StateTransition.TransitionHistory transitionHistory) {
+    public ActionLogWriter(MarkovChain2 markovChain, ServerPlayerEntity bot) {
         this.markovChain = markovChain;
-        this.transitionHistory = transitionHistory;
+        this.bot = bot;
     }
 
     /**
@@ -90,6 +89,40 @@ public class ActionLogWriter {
     }
 
     /**
+     * Simplified logStep method for use by FunctionCallerV2.
+     * This is the version actually called during plan execution.
+     */
+    public void logStep(
+            UUID planId,
+            short goalId,
+            State stateBefore,
+            int stepIndex,
+            PlannedStep step,
+            String outcome,
+            double reward,
+            boolean died) {
+
+        CompletableFuture.runAsync(() -> {
+            try {
+                // Update Markov chain
+                int contextHash = computeContextHash(stateBefore);
+                byte prev2 = 0; // Simplified - in real implementation track last 2 actions
+                byte prev1 = 0;
+                byte action = step.action;
+
+                markovChain.observeTransition(goalId, contextHash, prev2, prev1, action);
+
+                // Log for debugging
+                LOGGER.info("✓ Logged step {} for plan {}: action={}, outcome={}, reward={}, died={}",
+                    stepIndex, planId.toString().substring(0, 8), step.actionName, outcome, reward, died);
+
+            } catch (Exception e) {
+                LOGGER.error("Failed to log step {}: {}", stepIndex, e.getMessage(), e);
+            }
+        }, ASYNC_EXECUTOR);
+    }
+
+    /**
      * Log plan completion with final outcome.
      */
     public void logPlanComplete(UUID planId, short goalId, boolean success, double totalReward) {
@@ -111,7 +144,7 @@ public class ActionLogWriter {
 
         // Nearby hostile count bucket
         long hostileCount = state.getNearbyEntities().stream()
-            .filter(e -> e.isHostile())
+            .filter(net.shasankp000.Entity.EntityDetails::isHostile)
             .count();
         hash = 31 * hash + (int)(hostileCount / 3); // bucket by 3s
 
