@@ -1,44 +1,84 @@
 package net.shasankp000.GameAI.planner;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
 
 /**
- * Represents a complete action plan with score.
+ * Represents a planned action sequence for achieving a goal.
  */
 public class Plan {
-    private final UUID planId;
-    private final short goalId;
-    private final List<PlannedStep> steps;
-    private final double totalScore;
+    public final UUID planId;
+    public final short goalId;
+    public final List<PlannedStep> steps;
 
-    public Plan(UUID planId, short goalId, List<PlannedStep> steps, double totalScore) {
+    public double estimatedRisk;
+    public long createdAt;
+
+    public Plan(UUID planId, short goalId, List<PlannedStep> steps) {
         this.planId = planId;
         this.goalId = goalId;
-        this.steps = steps;
-        this.totalScore = totalScore;
+        this.steps = new ArrayList<>(steps);
+        this.estimatedRisk = 0.0;
+        this.createdAt = System.currentTimeMillis();
     }
 
-    public UUID getPlanId() {
-        return planId;
+    /**
+     * Get plan summary for logging.
+     */
+    public String getSummary() {
+        StringBuilder sb = new StringBuilder();
+        sb.append(String.format("Plan %s (Goal: %d, Risk: %.2f):\n",
+                               planId.toString().substring(0, 8), goalId, estimatedRisk));
+
+        for (int i = 0; i < steps.size(); i++) {
+            PlannedStep step = steps.get(i);
+            sb.append(String.format("  %d. %s (risk: %.2f)",
+                                  i + 1, step.actionName, step.estimatedRisk));
+
+            if (step.params != null) {
+                sb.append(String.format(" [%s]", step.params));
+            }
+
+            sb.append("\n");
+        }
+
+        return sb.toString();
     }
 
-    public short getGoalId() {
-        return goalId;
+    /**
+     * Check if plan is complete (all steps executed).
+     */
+    public boolean isComplete(int currentStep) {
+        return currentStep >= steps.size();
     }
 
-    public List<PlannedStep> getSteps() {
-        return steps;
+    /**
+     * Get next step to execute.
+     */
+    public PlannedStep getNextStep(int currentStep) {
+        if (currentStep < 0 || currentStep >= steps.size()) {
+            return null;
+        }
+        return steps.get(currentStep);
     }
 
-    public double getTotalScore() {
-        return totalScore;
+    /**
+     * Get total estimated time cost.
+     */
+    public int getTotalTimeCost() {
+        // This would be computed by CheapForward during planning
+        // For now, return step count as proxy
+        return steps.size() * 5; // ~5 ticks per action average
     }
 
     @Override
     public String toString() {
-        return String.format("Plan{id=%s, goal=%d, steps=%d, score=%.2f}",
-                planId, goalId, steps.size(), totalScore);
+        return String.format("Plan[id=%s, goal=%d, steps=%d, risk=%.2f]",
+                           planId.toString().substring(0, 8),
+                           goalId,
+                           steps.size(),
+                           estimatedRisk);
     }
 }
 

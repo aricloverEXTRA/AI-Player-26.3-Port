@@ -1943,9 +1943,8 @@ public class RLAgent {
     /**
      * Risk estimation for planner system.
      * Returns detailed risk breakdown for an action.
-     * This method leverages the comprehensive calculateRisk logic.
      */
-    public RiskEstimate estimateRisk(State state, String actionName, net.minecraft.server.network.ServerPlayerEntity bot) {
+    public RiskEstimate estimateRisk(State state, String actionName) {
         // Convert action name to Action enum
         Action action;
         try {
@@ -1955,33 +1954,21 @@ public class RLAgent {
             return new RiskEstimate(0.1, 0.0, 5.0);
         }
 
-        // Get base risk from calculateRisk (uses comprehensive risk analysis including
-        // hostile entities, projectiles, creeper phases, structure danger, etc.)
+        // Get base risk from calculateRisk
         List<Action> singleAction = Collections.singletonList(action);
-        Map<Action, Double> riskMap = calculateRisk(state, singleAction, bot);
+        Map<Action, Double> riskMap = calculateRisk(state, singleAction, null);
         double totalRisk = riskMap.getOrDefault(action, 10.0);
 
         // Estimate death probability (sigmoid of risk)
-        // Higher risk → higher death probability
         double deathProb = 1.0 / (1.0 + Math.exp(-totalRisk / 20.0 + 2.5));
 
-        // Estimate expected damage based on nearby hostile entities
+        // Estimate expected damage
         double expectedDamage = 0.0;
         if (state.getDistanceToHostileEntity() < 5.0 && !state.getNearbyEntities().isEmpty()) {
             expectedDamage = state.getNearbyEntities().stream()
                 .filter(EntityDetails::isHostile)
-                .mapToDouble(e -> {
-                    // Use proper bot coordinates for accurate entity risk calculation
-                    double entityRisk = getEntityRisk(e, state.getBotX(), state.getBotY(), state.getBotZ());
-                    // Convert entity risk to damage estimate (rough heuristic)
-                    return entityRisk * 0.5;
-                })
+                .mapToDouble(e -> getEntityRisk(e, 0, 0, 0) * 0.5)
                 .sum();
-        }
-
-        // Add low-health penalty to death risk
-        if (state.getBotHealth() < 6) {
-            deathProb = Math.min(1.0, deathProb + 0.2); // +20% death risk at low HP
         }
 
         return new RiskEstimate(deathProb, expectedDamage, totalRisk);
@@ -2018,12 +2005,12 @@ public class RLAgent {
      * Risk estimate data structure for planner.
      */
     public static class RiskEstimate {
-        public final double deathRisk;        // Death probability (0.0-1.0)
+        public final double deathProbability; // 0.0 to 1.0
         public final double expectedDamage;   // HP damage
         public final double totalRisk;        // Overall risk score
 
-        public RiskEstimate(double deathRisk, double expectedDamage, double totalRisk) {
-            this.deathRisk = deathRisk;
+        public RiskEstimate(double deathProbability, double expectedDamage, double totalRisk) {
+            this.deathProbability = deathProbability;
             this.expectedDamage = expectedDamage;
             this.totalRisk = totalRisk;
         }

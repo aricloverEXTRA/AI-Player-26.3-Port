@@ -1,72 +1,61 @@
 package net.shasankp000.GameAI.planner;
 
-import java.io.Serializable;
-import java.util.Arrays;
+import java.util.concurrent.atomic.AtomicIntegerArray;
 
 /**
- * Statistics for a Markov transition.
- * Stores counts for each possible next action (0-39).
+ * Stores transition counts for a single Markov key.
+ * Thread-safe via atomic operations.
  */
-public class MarkovStats implements Serializable {
-    private static final long serialVersionUID = 1L;
-    private static final int NUM_ACTIONS = 40;
+public class MarkovStats {
+    private static final int MAX_ACTIONS = 256; // Support up to 256 different action types
 
-    private final int[] counts;
-    private int total;
+    private final AtomicIntegerArray counts;
+    private volatile int total;
 
     public MarkovStats() {
-        this.counts = new int[NUM_ACTIONS];
+        this.counts = new AtomicIntegerArray(MAX_ACTIONS);
         this.total = 0;
     }
 
     /**
-     * Record an observed transition to the given action.
+     * Record that action 'actionId' was taken from this state.
      */
-    public synchronized void observe(byte actionId) {
-        if (actionId >= 0 && actionId < NUM_ACTIONS) {
-            counts[actionId]++;
+    public void recordTransition(byte actionId) {
+        int idx = actionId & 0xFF; // Convert to unsigned
+        counts.incrementAndGet(idx);
+        synchronized (this) {
             total++;
         }
     }
 
     /**
-     * Get the count for a specific action.
+     * Get count for a specific action.
      */
     public int getCount(byte actionId) {
-        if (actionId >= 0 && actionId < NUM_ACTIONS) {
-            return counts[actionId];
-        }
-        return 0;
+        int idx = actionId & 0xFF;
+        return counts.get(idx);
     }
 
     /**
-     * Get total count of all transitions.
+     * Get total transitions from this state.
      */
-    public int getTotal() {
+    public synchronized int getTotal() {
         return total;
     }
 
     /**
-     * Get probability of action with add-1 smoothing.
+     * Get probability of action with Laplace smoothing.
+     * P(action) = (count + 1) / (total + vocabSize)
      */
-    public double getProbability(byte actionId, double smoothingAlpha) {
-        if (actionId < 0 || actionId >= NUM_ACTIONS) {
-            return 0.0;
-        }
-        return (counts[actionId] + smoothingAlpha) / (total + smoothingAlpha * NUM_ACTIONS);
-    }
-
-    /**
-     * Get all counts (for sampling).
-     */
-    public int[] getCounts() {
-        return Arrays.copyOf(counts, counts.length);
+    public double getProbability(byte actionId, int vocabSize) {
+        int count = getCount(actionId);
+        int tot = getTotal();
+        return (count + 1.0) / (tot + vocabSize);
     }
 
     @Override
     public String toString() {
-        return String.format("MarkovStats{total=%d, nonZero=%d}",
-                total, Arrays.stream(counts).filter(c -> c > 0).count());
+        return String.format("MarkovStats[total=%d]", total);
     }
 }
 

@@ -1,177 +1,230 @@
 package net.shasankp000.GameAI.planner;
 
-import net.minecraft.server.network.ServerPlayerEntity;
 import net.shasankp000.GameAI.State;
-import net.shasankp000.GameAI.StateActions;
 import net.shasankp000.GameAI.StateTransition;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.io.BufferedWriter;
+import java.io.FileWriter;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.UUID;
-import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.BlockingQueue;
+import java.util.concurrent.LinkedBlockingQueue;
 
 /**
- * ActionLogWriter logs executed planning steps to StateTransition
- * and updates the MarkovChain2 model for learning.
+ * Logs executed actions and updates Markov chain for learning.
+ * Runs asynchronously to avoid blocking game thread.
  */
-public class ActionLogWriter {
-    private static final Logger LOGGER = LoggerFactory.getLogger("ActionLogWriter");
-    private static final ExecutorService ASYNC_EXECUTOR = Executors.newFixedThreadPool(2);
+public class ActionLogWriter implements Runnable {
+    private static final Logger LOGGER = LoggerFactory.getLogger("planner");
+    private static final String LOG_DIR = "action_logs";
 
+    private final BlockingQueue<LogEntry> queue;
     private final MarkovChain2 markovChain;
-    private final ServerPlayerEntity bot;
+    private final StateTransition stateTransition;
+    private volatile boolean running;
+    private final Thread writerThread;
+    private BufferedWriter logWriter;
 
-    public ActionLogWriter(MarkovChain2 markovChain, ServerPlayerEntity bot) {
+    public ActionLogWriter(MarkovChain2 markovChain, StateTransition stateTransition) {
+        this.queue = new LinkedBlockingQueue<>(1000);
         this.markovChain = markovChain;
-        this.bot = bot;
-    }
+        this.stateTransition = stateTransition;
+        this.running = true;
+        this.writerThread = new Thread(this, "ActionLogWriter");
 
-    /**
-     * Log a single executed step asynchronously.
-     *
-     * @param planId The plan UUID
-     * @param goalId The goal identifier
-     * @param stepIndex Index of this step in the plan
-     * @param action The action byte ID
-     * @param params Action parameters (nullable)
-     * @param stateBefore State before execution
-     * @param stateAfter State after execution
-     * @param riskBefore Pre-execution risk score
-     * @param reward Reward received
-     * @param died Whether bot died during execution
-     * @param bot The bot player entity
-     */
-    public CompletableFuture<Void> logStepAsync(
-            UUID planId,
-            short goalId,
-            int stepIndex,
-            byte action,
-            String params,
-            State stateBefore,
-            State stateAfter,
-            double riskBefore,
-            double reward,
-            boolean died,
-            ServerPlayerEntity bot) {
-
-        return CompletableFuture.runAsync(() -> {
-            try {
-                // 1. Record transition in StateTransition
-                StateActions.Action actionEnum = StateActions.Action.values()[action];
-                StateTransition transition = new StateTransition(
-                    stateBefore,
-                    stateAfter,
-                    actionEnum,
-                    reward,
-                    0.0, // podValue - calculated separately if needed
-                    died,
-                    died ? 0 : -1 // stepsUntilDeath
-                );
-                transitionHistory.addTransition(transition);
-
-                // 2. Update Markov chain
-                int contextHash = computeContextHash(stateBefore);
-                byte prev2 = getPreviousAction(stepIndex, 2);
-                byte prev1 = getPreviousAction(stepIndex, 1);
-
-                markovChain.observeTransition(goalId, contextHash, prev2, prev1, action);
-
-                // 3. Log for debugging
-                LOGGER.info("✓ Logged step {} for plan {}: action={}, reward={}, died={}",
-                    stepIndex, planId.toString().substring(0, 8), action, reward, died);
-
-            } catch (Exception e) {
-                LOGGER.error("Failed to log step {}: {}", stepIndex, e.getMessage(), e);
+        // Initialize log file
+        try {
+            Path logDirPath = Paths.get(LOG_DIR);
+            if (!Files.exists(logDirPath)) {
+                Files.createDirectories(logDirPath);
             }
-        }, ASYNC_EXECUTOR);
+
+            String logFile = String.format("%s/action_log_%d.csv",
+                LOG_DIR, System.currentTimeMillis());
+            this.logWriter = new BufferedWriter(new FileWriter(logFile));
+
+            // Write CSV header
+            logWriter.write("timestamp,planId,goalId,contextHash,stepIndex,actionId," +
+                          "actionName,riskBefore,outcome,reward,died\n");
+            logWriter.flush();
+
+            LOGGER.info("Action log initialized: {}", logFile);
+
+        } catch (IOException e) {
+            LOGGER.error("Failed to initialize action log", e);
+            this.logWriter = null;
+        }
+
+        writerThread.start();
     }
 
     /**
-     * Simplified logStep method for use by FunctionCallerV2.
-     * This is the version actually called during plan execution.
+     * Log an executed action step.
      */
-    public void logStep(
-            UUID planId,
-            short goalId,
-            State stateBefore,
-            int stepIndex,
-            PlannedStep step,
-            String outcome,
-            double reward,
-            boolean died) {
+    public void logStep(UUID planId, short goalId, State stateBefore,
+                       int stepIndex, PlannedStep step,
+                       String outcome, double reward, boolean died) {
 
-        CompletableFuture.runAsync(() -> {
+        LogEntry entry = new LogEntry(
+            System.currentTimeMillis(),
+            planId,
+            goalId,
+            computeContextHash(stateBefore),
+            stepIndex,
+            step.actionId,
+            step.actionName,
+            step.estimatedRisk,
+            outcome,
+            reward,
+            died
+        );
+
+        if (!queue.offer(entry)) {
+            LOGGER.warn("Action log queue full, dropping entry");
+        }
+    }
+
+    @Override
+    public void run() {
+        LOGGER.info("ActionLogWriter thread started");
+
+        while (running || !queue.isEmpty()) {
             try {
-                // Update Markov chain
-                int contextHash = computeContextHash(stateBefore);
-                byte prev2 = 0; // Simplified - in real implementation track last 2 actions
-                byte prev1 = 0;
-                byte action = step.action;
-
-                markovChain.observeTransition(goalId, contextHash, prev2, prev1, action);
-
-                // Log for debugging
-                LOGGER.info("✓ Logged step {} for plan {}: action={}, outcome={}, reward={}, died={}",
-                    stepIndex, planId.toString().substring(0, 8), step.actionName, outcome, reward, died);
-
-            } catch (Exception e) {
-                LOGGER.error("Failed to log step {}: {}", stepIndex, e.getMessage(), e);
+                LogEntry entry = queue.poll(1, java.util.concurrent.TimeUnit.SECONDS);
+                if (entry != null) {
+                    processEntry(entry);
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
             }
-        }, ASYNC_EXECUTOR);
+        }
+
+        // Cleanup
+        try {
+            if (logWriter != null) {
+                logWriter.close();
+            }
+        } catch (IOException e) {
+            LOGGER.error("Failed to close log writer", e);
+        }
+
+        LOGGER.info("ActionLogWriter thread stopped");
     }
 
     /**
-     * Log plan completion with final outcome.
+     * Process a single log entry.
      */
-    public void logPlanComplete(UUID planId, short goalId, boolean success, double totalReward) {
-        LOGGER.info("Plan {} completed: goalId={}, success={}, totalReward={}",
-            planId.toString().substring(0, 8), goalId, success, totalReward);
+    private void processEntry(LogEntry entry) {
+        // Write to CSV
+        if (logWriter != null) {
+            try {
+                logWriter.write(String.format("%d,%s,%d,%d,%d,%d,%s,%.2f,%s,%.2f,%b\n",
+                    entry.timestamp,
+                    entry.planId.toString(),
+                    entry.goalId,
+                    entry.contextHash,
+                    entry.stepIndex,
+                    entry.actionId & 0xFF,
+                    entry.actionName,
+                    entry.riskBefore,
+                    entry.outcome,
+                    entry.reward,
+                    entry.died
+                ));
+
+                // Flush periodically
+                if (entry.stepIndex % 10 == 0) {
+                    logWriter.flush();
+                }
+
+            } catch (IOException e) {
+                LOGGER.error("Failed to write log entry", e);
+            }
+        }
+
+        // Update Markov chain (for learning)
+        if (entry.stepIndex > 0) {
+            // Get previous actions from plan history
+            // For now, use simple prev1/prev2 = 0 (would need plan context)
+            byte prev1 = 0;
+            byte prev2 = 0;
+
+            markovChain.observeTransition(
+                entry.goalId,
+                entry.contextHash,
+                prev2,
+                prev1,
+                entry.actionId
+            );
+        }
+
+        // Update StateTransition store (for RL learning)
+        // This would integrate with existing StateTransition tracking
+        // For now, just log
+        LOGGER.debug("Logged action: {} (reward: {}, died: {})",
+                    entry.actionName, entry.reward, entry.died);
     }
 
     /**
-     * Compute a simple hash for state context (for Markov key).
-     * Uses bucketed inventory signature + nearby entity types.
+     * Compute context hash (same as in MarkovChain2).
      */
-    private int computeContextHash(State state) {
+    private int computeContextHash(State context) {
         int hash = 17;
-
-        // Inventory signature (simplified)
-        hash = 31 * hash + (state.getHotBarItems().contains("minecraft:diamond_sword") ? 1 : 0);
-        hash = 31 * hash + (state.getHotBarItems().contains("minecraft:bow") ? 1 : 0);
-        hash = 31 * hash + (state.getHotBarItems().contains("minecraft:shield") ? 1 : 0);
-
-        // Nearby hostile count bucket
-        long hostileCount = state.getNearbyEntities().stream()
-            .filter(net.shasankp000.Entity.EntityDetails::isHostile)
-            .count();
-        hash = 31 * hash + (int)(hostileCount / 3); // bucket by 3s
-
-        // Health bucket
-        hash = 31 * hash + (state.getBotHealth() / 5);
-
+        hash = 31 * hash + (context.getBotHealth() / 5);
+        hash = 31 * hash + (context.getBotHungerLevel() / 5);
+        hash = 31 * hash + (context.getTimeOfDay().equals("night") ? 1 : 0);
         return hash;
     }
 
     /**
-     * Get the previous action at offset (for Markov 2nd order).
-     * Returns 0 if no previous action exists.
+     * Shutdown the writer thread.
      */
-    private byte getPreviousAction(int currentIndex, int offset) {
-        if (currentIndex < offset) {
-            return 0; // NO_ACTION / START
+    public void shutdown() {
+        running = false;
+        try {
+            writerThread.join(5000);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
         }
-        // In a real implementation, you'd track the last N actions in the Plan or in a local buffer
-        // For now, return 0 as placeholder
-        return 0;
     }
 
     /**
-     * Shutdown the async executor gracefully.
+     * Internal log entry structure.
      */
-    public static void shutdown() {
-        ASYNC_EXECUTOR.shutdown();
+    private static class LogEntry {
+        final long timestamp;
+        final UUID planId;
+        final short goalId;
+        final int contextHash;
+        final int stepIndex;
+        final byte actionId;
+        final String actionName;
+        final double riskBefore;
+        final String outcome;
+        final double reward;
+        final boolean died;
+
+        LogEntry(long timestamp, UUID planId, short goalId, int contextHash,
+                int stepIndex, byte actionId, String actionName, double riskBefore,
+                String outcome, double reward, boolean died) {
+            this.timestamp = timestamp;
+            this.planId = planId;
+            this.goalId = goalId;
+            this.contextHash = contextHash;
+            this.stepIndex = stepIndex;
+            this.actionId = actionId;
+            this.actionName = actionName;
+            this.riskBefore = riskBefore;
+            this.outcome = outcome;
+            this.reward = reward;
+            this.died = died;
+        }
     }
 }
 
