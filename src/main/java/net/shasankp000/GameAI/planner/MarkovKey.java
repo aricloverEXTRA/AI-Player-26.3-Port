@@ -3,14 +3,14 @@ package net.shasankp000.GameAI.planner;
 import java.util.Objects;
 
 /**
- * Compact key for 2nd-order Markov chain.
- * Captures: goal context, and previous 2 actions.
+ * Compact key for Markov chain lookups.
+ * Consists of: goalId, contextHash, prev2 action, prev1 action
  */
 public class MarkovKey {
-    public final short goalId;      // Which goal we're pursuing
-    public final int contextHash;   // State context fingerprint
-    public final byte prev2;        // Action 2 steps back
-    public final byte prev1;        // Action 1 step back
+    private final short goalId;
+    private final int contextHash;
+    private final byte prev2;
+    private final byte prev1;
 
     public MarkovKey(short goalId, int contextHash, byte prev2, byte prev1) {
         this.goalId = goalId;
@@ -19,10 +19,26 @@ public class MarkovKey {
         this.prev1 = prev1;
     }
 
+    public short getGoalId() {
+        return goalId;
+    }
+
+    public int getContextHash() {
+        return contextHash;
+    }
+
+    public byte getPrev2() {
+        return prev2;
+    }
+
+    public byte getPrev1() {
+        return prev1;
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) return true;
-        if (!(o instanceof MarkovKey)) return false;
+        if (o == null || getClass() != o.getClass()) return false;
         MarkovKey that = (MarkovKey) o;
         return goalId == that.goalId &&
                contextHash == that.contextHash &&
@@ -37,7 +53,8 @@ public class MarkovKey {
 
     @Override
     public String toString() {
-        return String.format("MK[g:%d,c:%x,p:%d->%d]", goalId, contextHash, prev2, prev1);
+        return String.format("MarkovKey{goal=%d, ctx=%d, prev2=%d, prev1=%d}",
+                goalId, contextHash, prev2, prev1);
     }
 }
 

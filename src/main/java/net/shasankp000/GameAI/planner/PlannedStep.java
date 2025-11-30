@@ -1,17 +1,13 @@
 package net.shasankp000.GameAI.planner;
 
-import java.io.Serializable;
-
 /**
  * Represents a single planned action step.
  */
-public class PlannedStep implements Serializable {
-    private static final long serialVersionUID = 1L;
-
-    public final byte actionId;        // Compact action identifier (0-39)
-    public final String actionName;    // Human-readable action name
-    public double estimatedRisk;       // Risk estimate from SequenceRiskAnalyzer
-    public String params;              // Optional parameters (JSON or simple string)
+public class PlannedStep {
+    private final byte actionId;
+    private final String actionName;
+    private double estimatedRisk;
+    private final String params;
 
     public PlannedStep(byte actionId, String actionName, double estimatedRisk, String params) {
         this.actionId = actionId;
@@ -20,82 +16,30 @@ public class PlannedStep implements Serializable {
         this.params = params;
     }
 
-    /**
-     * Create step without parameters.
-     */
-    public PlannedStep(byte actionId, String actionName) {
-        this(actionId, actionName, 0.0, null);
+    public byte getActionId() {
+        return actionId;
     }
 
-    /**
-     * Check if this is a movement action.
-     */
-    public boolean isMovement() {
-        int id = actionId & 0xFF;
-        return id >= 1 && id <= 7;
+    public String getActionName() {
+        return actionName;
     }
 
-    /**
-     * Check if this is a combat action.
-     */
-    public boolean isCombat() {
-        int id = actionId & 0xFF;
-        return id >= 10 && id <= 13;
+    public double getEstimatedRisk() {
+        return estimatedRisk;
     }
 
-    /**
-     * Check if this is a utility action.
-     */
-    public boolean isUtility() {
-        int id = actionId & 0xFF;
-        return id >= 20 && id <= 25;
+    public void setEstimatedRisk(double risk) {
+        this.estimatedRisk = risk;
     }
 
-    /**
-     * Check if this is a hotbar action.
-     */
-    public boolean isHotbarSwitch() {
-        int id = actionId & 0xFF;
-        return id >= 31 && id <= 39;
-    }
-
-    /**
-     * Get risk level category.
-     */
-    public String getRiskLevel() {
-        if (estimatedRisk < 5.0) return "LOW";
-        if (estimatedRisk < 15.0) return "MEDIUM";
-        if (estimatedRisk < 30.0) return "HIGH";
-        return "CRITICAL";
+    public String getParams() {
+        return params;
     }
 
     @Override
     public String toString() {
-        StringBuilder sb = new StringBuilder();
-        sb.append(actionName);
-
-        if (params != null && !params.isEmpty()) {
-            sb.append("(").append(params).append(")");
-        }
-
-        sb.append(" [risk: ").append(String.format("%.1f", estimatedRisk)).append("]");
-
-        return sb.toString();
-    }
-
-    @Override
-    public boolean equals(Object o) {
-        if (this == o) return true;
-        if (!(o instanceof PlannedStep)) return false;
-
-        PlannedStep that = (PlannedStep) o;
-        return actionId == that.actionId &&
-               actionName.equals(that.actionName);
-    }
-
-    @Override
-    public int hashCode() {
-        return 31 * actionId + actionName.hashCode();
+        return String.format("%s (id=%d, risk=%.2f, params=%s)",
+                           actionName, actionId, estimatedRisk, params);
     }
 }
 

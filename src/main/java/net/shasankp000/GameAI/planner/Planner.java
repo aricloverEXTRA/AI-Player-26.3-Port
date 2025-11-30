@@ -1,5 +1,6 @@
 package net.shasankp000.GameAI.planner;
 
+import net.minecraft.server.network.ServerPlayerEntity;
 import net.shasankp000.GameAI.RLAgent;
 import net.shasankp000.GameAI.State;
 import org.slf4j.Logger;
@@ -9,13 +10,13 @@ import java.util.*;
 import java.util.concurrent.*;
 
 /**
- * Main planner orchestrator implementing beam-search refinement.
- * Generates and refines action plans using Markov chains and risk analysis.
+ * Main planner: generates and scores action plans using Markov chains and RL risk analysis.
+ * Implements parallel planning with beam search refinement.
  */
 public class Planner {
-    private static final Logger LOGGER = LoggerFactory.getLogger("planner");
+    private static final Logger LOGGER = LoggerFactory.getLogger(Planner.class);
 
-    // Hyperparameters
+    // Configuration constants
     private static final int INITIAL_DRAFTS = 4;
     private static final int BEAM_WIDTH = 3;
     private static final int MAX_REFINEMENT_ITERS = 6;
@@ -29,276 +30,146 @@ public class Planner {
     private final ExecutorService executor;
     private final Random random;
 
-    public Planner(MarkovChain2 markovChain, RLAgent rlAgent) {
+    public Planner(MarkovChain2 markovChain, RLAgent rlAgent, ServerPlayerEntity bot) {
         this.markovChain = markovChain;
-        this.riskAnalyzer = new SequenceRiskAnalyzer(rlAgent);
-        this.executor = Executors.newFixedThreadPool(4,
-            r -> new Thread(r, "PlannerWorker-" + System.identityHashCode(r)));
+        this.riskAnalyzer = new SequenceRiskAnalyzer(rlAgent, bot);
+        this.executor = Executors.newFixedThreadPool(4);
         this.random = new Random();
     }
 
     /**
-     * Build an action plan for a goal.
-     *
-     * @param currentState Current game state
-     * @param goalSpec Goal specification (goalId)
-     * @return Optimized plan or null if failed
+     * Build a plan for the given goal.
      */
-    public Plan buildPlan(State currentState, short goalSpec) {
-        long startTime = System.currentTimeMillis();
+    public Plan buildPlan(State currentState, short goalId) {
+        LOGGER.info("[planner] Building plan for goal {} with state HP={}", goalId, currentState.getBotHealth());
 
-        LOGGER.info("Building plan for goal: {}", goalSpec);
-
-        // Step 1: Generate initial drafts in parallel
-        List<Future<ScoredPlan>> draftFutures = new ArrayList<>();
-        for (int i = 0; i < INITIAL_DRAFTS; i++) {
-            draftFutures.add(executor.submit(() -> generateDraft(goalSpec, currentState)));
-        }
-
-        // Collect drafts
-        List<ScoredPlan> drafts = new ArrayList<>();
-        for (Future<ScoredPlan> future : draftFutures) {
-            try {
-                ScoredPlan draft = future.get(2, TimeUnit.SECONDS);
-                if (draft != null) {
-                    drafts.add(draft);
-                }
-            } catch (Exception e) {
-                LOGGER.warn("Draft generation failed: {}", e.getMessage());
-            }
-        }
+        // Generate initial drafts in parallel
+        List<Plan> drafts = generateDraftsParallel(currentState, goalId);
 
         if (drafts.isEmpty()) {
-            LOGGER.warn("No valid drafts generated");
+            LOGGER.warn("[planner] No valid drafts generated");
             return null;
         }
 
-        // Sort by score (lower is better)
-        drafts.sort(Comparator.comparingDouble(sp -> sp.score));
+        // Score and select best drafts
+        List<Plan> beam = selectTopPlans(drafts, BEAM_WIDTH);
 
-        LOGGER.info("Generated {} drafts, best score: {:.2f}",
-                   drafts.size(), drafts.get(0).score);
-
-        // Step 2: Beam search refinement
-        List<ScoredPlan> beam = new ArrayList<>();
-        for (int i = 0; i < Math.min(BEAM_WIDTH, drafts.size()); i++) {
-            beam.add(drafts.get(i));
-        }
-
-        ScoredPlan bestPlan = beam.get(0);
-
+        // Iterative refinement
         for (int iter = 0; iter < MAX_REFINEMENT_ITERS; iter++) {
-            LOGGER.debug("Refinement iteration {}/{}", iter + 1, MAX_REFINEMENT_ITERS);
-
-            // Generate neighbors for each plan in beam
-            List<ScoredPlan> neighbors = new ArrayList<>();
-            for (ScoredPlan plan : beam) {
-                neighbors.addAll(generateNeighbors(plan, goalSpec, currentState));
-            }
+            List<Plan> neighbors = generateNeighborsParallel(beam, currentState, goalId);
 
             if (neighbors.isEmpty()) {
-                break; // No improvements possible
+                break;
             }
 
-            // Sort all neighbors
-            neighbors.sort(Comparator.comparingDouble(sp -> sp.score));
+            beam = selectTopPlans(neighbors, BEAM_WIDTH);
 
-            // Update beam with top-K
-            beam.clear();
-            for (int i = 0; i < Math.min(BEAM_WIDTH, neighbors.size()); i++) {
-                beam.add(neighbors.get(i));
-            }
-
-            // Check for improvement
-            if (beam.get(0).score < bestPlan.score) {
-                bestPlan = beam.get(0);
-                LOGGER.debug("Improved plan score: {:.2f}", bestPlan.score);
-            }
-
-            // Early stop if safe enough
-            if (bestPlan.score < SAFE_THRESHOLD) {
-                LOGGER.info("Plan reached safe threshold");
+            if (beam.get(0).getTotalScore() < SAFE_THRESHOLD) {
                 break;
             }
         }
 
-        long duration = System.currentTimeMillis() - startTime;
-        LOGGER.info("Planning completed in {}ms, final score: {:.2f}",
-                   duration, bestPlan.score);
+        Plan bestPlan = beam.get(0);
 
-        // Create final plan object
-        if (bestPlan.score < 200.0) { // Reject plans that are too risky
-            Plan plan = new Plan(UUID.randomUUID(), goalSpec, bestPlan.steps);
-            plan.estimatedRisk = bestPlan.score;
-            return plan;
-        } else {
-            LOGGER.warn("Best plan score too high ({}), rejecting", bestPlan.score);
-            return null;
-        }
-    }
-
-    /**
-     * Generate a single draft plan.
-     */
-    private ScoredPlan generateDraft(short goalId, State state) {
-        int length = MIN_PLAN_LENGTH + random.nextInt(MAX_PLAN_LENGTH - MIN_PLAN_LENGTH);
-
-        List<PlannedStep> steps = markovChain.draftPlan(
-            goalId, state, length, EXPLORATION_EPSILON);
-
-        if (steps.isEmpty()) {
-            return null;
-        }
-
-        double score = riskAnalyzer.scorePlan(steps, state, goalId);
-        return new ScoredPlan(steps, score);
-    }
-
-    /**
-     * Generate neighbor plans via local edits.
-     */
-    private List<ScoredPlan> generateNeighbors(ScoredPlan parent, short goalId, State state) {
-        List<ScoredPlan> neighbors = new ArrayList<>();
-
-        // Strategy 1: Replace a segment with Markov resample
-        if (parent.steps.size() >= 3) {
-            ScoredPlan neighbor = replaceSegment(parent, goalId, state);
-            if (neighbor != null) {
-                neighbors.add(neighbor);
-            }
-        }
-
-        // Strategy 2: Insert safety action (eat, shield, torch)
-        ScoredPlan safetyNeighbor = insertSafetyAction(parent, state);
-        if (safetyNeighbor != null) {
-            neighbors.add(safetyNeighbor);
-        }
-
-        // Strategy 3: Delete duplicate/redundant actions
-        ScoredPlan dedupNeighbor = removeDuplicates(parent, goalId, state);
-        if (dedupNeighbor != null) {
-            neighbors.add(dedupNeighbor);
-        }
-
-        return neighbors;
-    }
-
-    /**
-     * Replace a random segment with Markov-generated sequence.
-     */
-    private ScoredPlan replaceSegment(ScoredPlan parent, short goalId, State state) {
-        List<PlannedStep> steps = new ArrayList<>(parent.steps);
-
-        if (steps.size() < 3) {
-            return null;
-        }
-
-        // Pick random segment to replace
-        int start = random.nextInt(steps.size() - 2);
-        int end = start + 1 + random.nextInt(Math.min(3, steps.size() - start));
-
-        // Generate replacement
-        List<PlannedStep> replacement = markovChain.draftPlan(
-            goalId, state, end - start, EXPLORATION_EPSILON * 2);
-
-        if (replacement.isEmpty()) {
-            return null;
-        }
-
-        // Splice in replacement
-        steps.subList(start, end).clear();
-        steps.addAll(start, replacement);
-
-        double score = riskAnalyzer.scorePlan(steps, state, goalId);
-        return new ScoredPlan(steps, score);
-    }
-
-    /**
-     * Insert a safety action at a risky point.
-     */
-    private ScoredPlan insertSafetyAction(ScoredPlan parent, State state) {
-        List<PlannedStep> steps = new ArrayList<>(parent.steps);
-
-        // Find highest risk step
-        int maxRiskIdx = 0;
-        double maxRisk = 0.0;
-        for (int i = 0; i < steps.size(); i++) {
-            if (steps.get(i).estimatedRisk > maxRisk) {
-                maxRisk = steps.get(i).estimatedRisk;
-                maxRiskIdx = i;
-            }
-        }
-
-        // Choose safety action based on context
-        PlannedStep safety = chooseSafetyAction(state);
-
-        if (safety == null) {
-            return null;
-        }
-
-        // Insert before risky action
-        steps.add(maxRiskIdx, safety);
-
-        double score = riskAnalyzer.scorePlan(steps, state, (short) 0);
-        return new ScoredPlan(steps, score);
-    }
-
-    /**
-     * Choose appropriate safety action.
-     */
-    private PlannedStep chooseSafetyAction(State state) {
-        // Eat if hungry
-        if (state.getBotHungerLevel() < 14) {
-            return new PlannedStep((byte) 22, "eat_food", 0.0, null);
-        }
-
-        // Shield if enemies nearby
-        if (state.getNearbyEntities().stream().anyMatch(e -> e.isHostile())) {
-            return new PlannedStep((byte) 12, "use_shield", 0.0, null);
-        }
-
-        // Torch if dark
-        if (state.getTimeOfDay().equals("night")) {
-            return new PlannedStep((byte) 25, "use_torch", 0.0, null);
+        if (bestPlan.getTotalScore() < SAFE_THRESHOLD * 4) {
+            return bestPlan;
         }
 
         return null;
     }
 
-    /**
-     * Remove duplicate or redundant actions.
-     */
-    private ScoredPlan removeDuplicates(ScoredPlan parent, short goalId, State state) {
-        List<PlannedStep> steps = new ArrayList<>();
+    private List<Plan> generateDraftsParallel(State state, short goalId) {
+        List<CompletableFuture<Plan>> futures = new ArrayList<>();
 
-        PlannedStep prev = null;
-        int consecCount = 0;
-
-        for (PlannedStep step : parent.steps) {
-            if (prev != null && step.actionId == prev.actionId) {
-                consecCount++;
-                // Keep max 2 consecutive identical actions
-                if (consecCount < 2) {
-                    steps.add(step);
-                }
-            } else {
-                steps.add(step);
-                consecCount = 0;
-            }
-            prev = step;
+        for (int i = 0; i < INITIAL_DRAFTS; i++) {
+            futures.add(CompletableFuture.supplyAsync(() -> generateDraft(state, goalId), executor));
         }
 
-        if (steps.size() == parent.steps.size()) {
-            return null; // No change
-        }
-
-        double score = riskAnalyzer.scorePlan(steps, state, goalId);
-        return new ScoredPlan(steps, score);
+        return futures.stream()
+                .map(f -> {
+                    try {
+                        return f.get(1, TimeUnit.SECONDS);
+                    } catch (Exception e) {
+                        return null;
+                    }
+                })
+                .filter(Objects::nonNull)
+                .toList();
     }
 
-    /**
-     * Shutdown executor.
-     */
+    private Plan generateDraft(State state, short goalId) {
+        try {
+            int length = MIN_PLAN_LENGTH + random.nextInt(MAX_PLAN_LENGTH - MIN_PLAN_LENGTH);
+            List<PlannedStep> steps = markovChain.draftPlan(goalId, state, length, EXPLORATION_EPSILON);
+
+            if (steps.isEmpty()) {
+                return null;
+            }
+
+            double score = riskAnalyzer.scoreSequence(steps, state, goalId);
+            return new Plan(UUID.randomUUID(), goalId, steps, score);
+        } catch (Exception e) {
+            LOGGER.error("[planner] Draft generation error: {}", e.getMessage());
+            return null;
+        }
+    }
+
+    private List<Plan> generateNeighborsParallel(List<Plan> beam, State state, short goalId) {
+        List<Plan> allNeighbors = Collections.synchronizedList(new ArrayList<>());
+
+        beam.parallelStream().forEach(plan -> {
+            allNeighbors.addAll(generateNeighbors(plan, state, goalId));
+        });
+
+        return allNeighbors;
+    }
+
+    private List<Plan> generateNeighbors(Plan plan, State state, short goalId) {
+        List<Plan> neighbors = new ArrayList<>();
+        List<PlannedStep> originalSteps = plan.getSteps();
+
+        if (originalSteps.isEmpty() || originalSteps.size() < 2) {
+            return neighbors;
+        }
+
+        // Neighbor 1: Replace random segment
+        try {
+            int start = random.nextInt(originalSteps.size() - 1);
+            int end = Math.min(originalSteps.size(), start + 2);
+            List<PlannedStep> newSteps = new ArrayList<>(originalSteps);
+            newSteps.subList(start, end).clear();
+            List<PlannedStep> replacement = markovChain.draftPlan(goalId, state, end - start, 0.3);
+            newSteps.addAll(start, replacement);
+            double score = riskAnalyzer.scoreSequence(newSteps, state, goalId);
+            neighbors.add(new Plan(UUID.randomUUID(), goalId, newSteps, score));
+        } catch (Exception e) {
+            // Skip this neighbor on error
+        }
+
+        // Neighbor 2: Insert safety action
+        if (originalSteps.size() < MAX_PLAN_LENGTH && state.getBotHealth() < 10) {
+            try {
+                List<PlannedStep> newSteps = new ArrayList<>(originalSteps);
+                byte safetyAction = ActionMapper.getActionId("eat_food");
+                newSteps.add(random.nextInt(newSteps.size() + 1),
+                           new PlannedStep(safetyAction, "eat_food", 0.0, null));
+                double score = riskAnalyzer.scoreSequence(newSteps, state, goalId);
+                neighbors.add(new Plan(UUID.randomUUID(), goalId, newSteps, score));
+            } catch (Exception e) {
+                // Skip this neighbor on error
+            }
+        }
+
+        return neighbors;
+    }
+
+    private List<Plan> selectTopPlans(List<Plan> plans, int topK) {
+        return plans.stream()
+                .sorted(Comparator.comparingDouble(Plan::getTotalScore))
+                .limit(topK)
+                .toList();
+    }
+
     public void shutdown() {
         executor.shutdown();
         try {
@@ -308,21 +179,6 @@ public class Planner {
         } catch (InterruptedException e) {
             executor.shutdownNow();
             Thread.currentThread().interrupt();
-        }
-    }
-
-    // ===== INNER CLASSES =====
-
-    /**
-     * Scored plan for beam search.
-     */
-    private static class ScoredPlan {
-        final List<PlannedStep> steps;
-        final double score;
-
-        ScoredPlan(List<PlannedStep> steps, double score) {
-            this.steps = new ArrayList<>(steps);
-            this.score = score;
         }
     }
 }

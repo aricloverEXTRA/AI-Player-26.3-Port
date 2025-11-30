@@ -2,183 +2,107 @@ package net.shasankp000.GameAI.planner;
 
 import net.shasankp000.GameAI.RLAgent;
 import net.shasankp000.GameAI.State;
+import net.shasankp000.GameAI.planner.CheapForward.FakeState;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.List;
 
 /**
- * Analyzes risk of action sequences using RLAgent's risk estimation
- * combined with cheap forward simulation.
+ * Analyzes the risk/quality of an action sequence.
+ * Combines: death risk, damage, time cost, Q-values, goal progress.
  */
 public class SequenceRiskAnalyzer {
-    private static final Logger LOGGER = LoggerFactory.getLogger("planner");
+    private static final Logger LOGGER = LoggerFactory.getLogger(SequenceRiskAnalyzer.class);
 
-    // Risk weights (tunable hyperparameters)
+    // Tunable weights
     private static final double W_DEATH_RISK = 50.0;
     private static final double W_DAMAGE = 5.0;
     private static final double W_TIME_COST = 0.1;
-    private static final double W_Q_BONUS = -10.0; // Negative = bonus
-    private static final double W_GOAL_PROGRESS = -20.0; // Reward for progress
+    private static final double W_Q_BONUS = -10.0; // Negative = reward
+    private static final double W_GOAL_PROGRESS = -20.0; // Negative = reward
 
     private final RLAgent rlAgent;
+    private final net.minecraft.server.network.ServerPlayerEntity bot;
 
-    public SequenceRiskAnalyzer(RLAgent rlAgent) {
+    public SequenceRiskAnalyzer(RLAgent rlAgent, net.minecraft.server.network.ServerPlayerEntity bot) {
         this.rlAgent = rlAgent;
+        this.bot = bot;
     }
 
     /**
-     * Score an action sequence (lower is better for safety).
+     * Score a sequence of actions (lower = better).
      *
-     * @param plan Action sequence to evaluate
-     * @param initialState Starting state
-     * @param goalId Target goal
-     * @return Risk score (lower = safer/better)
+     * @param steps The action sequence
+     * @param initialState Starting game state
+     * @param goalId Goal to achieve
+     * @return Total score (lower = better, negative = good)
      */
-    public double scorePlan(List<PlannedStep> plan, State initialState, short goalId) {
-        if (plan == null || plan.isEmpty()) {
-            return Double.MAX_VALUE; // Invalid plan
-        }
-
-        double totalScore = 0.0;
-        double accumulatedDeathRisk = 0.0;
-        double accumulatedDamage = 0.0;
+    public double scoreSequence(List<PlannedStep> steps, State initialState, short goalId) {
+        double totalDeathRisk = 0.0;
+        double totalDamage = 0.0;
+        double totalTimeCost;
+        double totalQBonus = 0.0;
 
         // Initialize fake state for simulation
-        CheapForward.FakeState fakeState = CheapForward.initFromState(initialState);
-        State currentState = initialState;
+        FakeState fakeState = new FakeState(initialState);
 
-        // Evaluate each step
-        for (int i = 0; i < plan.size(); i++) {
-            PlannedStep step = plan.get(i);
+        for (PlannedStep step : steps) {
+            String actionName = step.getActionName();
 
-            // Get risk estimate from RL agent
-            RLAgent.RiskEstimate riskEst = rlAgent.estimateRisk(currentState, step.actionName);
+            // Get risk estimates from RLAgent (uses comprehensive calculateRisk internally)
+            RLAgent.RiskEstimate risk = rlAgent.estimateRisk(initialState, actionName, bot);
+            totalDeathRisk += risk.deathRisk;
+            totalDamage += risk.expectedDamage;
 
-            // Accumulate death risk (exponential penalty)
-            accumulatedDeathRisk += riskEst.deathProbability;
-            accumulatedDamage += riskEst.expectedDamage;
+            // Get Q-value bonus
+            double qValue = rlAgent.getQValue(initialState, actionName);
+            totalQBonus += qValue;
 
-            // Get Q-value bonus (if action has been learned as good)
-            double qBonus = rlAgent.getQValue(currentState, step.actionName);
-
-            // Apply action to cheap forward simulator
-            CheapForward.apply(fakeState, step);
-
-            // Store estimated risk in step
-            step.estimatedRisk = riskEst.totalRisk;
-
-            // Check for death risk spike (early termination)
-            if (accumulatedDeathRisk > 0.8) {
-                LOGGER.debug("Plan has high death risk ({}), penalizing heavily", accumulatedDeathRisk);
-                return 1000.0 + accumulatedDeathRisk * 500.0;
-            }
-
-            // Check for excessive time cost
-            if (fakeState.timeCost > 500) {
-                LOGGER.debug("Plan too slow (time: {}), penalizing", fakeState.timeCost);
-                totalScore += 100.0;
-            }
+            // Apply action to fake state
+            CheapForward.applyAction(fakeState, step.getActionId());
         }
 
-        // Compute goal progress bonus
-        double goalProgress = CheapForward.goalProgress(fakeState, goalId);
+        // Time cost from fake state
+        totalTimeCost = fakeState.timeCost;
 
-        // Final score calculation
-        totalScore += W_DEATH_RISK * accumulatedDeathRisk;
-        totalScore += W_DAMAGE * accumulatedDamage;
-        totalScore += W_TIME_COST * fakeState.timeCost;
-        totalScore += W_Q_BONUS * getAverageQValue(plan, currentState);
-        totalScore += W_GOAL_PROGRESS * goalProgress;
+        // Goal progress (negative = good)
+        double goalProgress = CheapForward.computeGoalProgress(fakeState, goalId);
 
-        // Penalty for dying (hunger/health)
-        if (fakeState.healthBucket <= 0) {
-            totalScore += 500.0;
-        }
-        if (fakeState.hungerBucket <= 0) {
-            totalScore += 100.0;
-        }
+        // Compute final score
+        double score = W_DEATH_RISK * totalDeathRisk
+                     + W_DAMAGE * totalDamage
+                     + W_TIME_COST * totalTimeCost
+                     + W_Q_BONUS * totalQBonus
+                     + W_GOAL_PROGRESS * goalProgress;
 
-        // Penalty for incomplete goal
-        if (!CheapForward.goalReached(fakeState, goalId)) {
-            totalScore += 50.0 * (1.0 - goalProgress);
-        }
+        LOGGER.debug("[risk-analyzer] Sequence score: {} (death={}, damage={}, time={}, q={}, progress={})",
+                score, totalDeathRisk, totalDamage, totalTimeCost, totalQBonus, goalProgress);
 
-        return totalScore;
+        return score;
     }
 
     /**
-     * Get average Q-value of actions in plan.
+     * Quick score estimate without detailed logging (for beam search).
      */
-    private double getAverageQValue(List<PlannedStep> plan, State state) {
-        double sum = 0.0;
-        int count = 0;
+    public double quickScore(List<PlannedStep> steps, State initialState, short goalId) {
+        FakeState fakeState = new FakeState(initialState);
+        double risk = 0.0;
 
-        for (PlannedStep step : plan) {
-            double qVal = rlAgent.getQValue(state, step.actionName);
-            if (!Double.isNaN(qVal) && !Double.isInfinite(qVal)) {
-                sum += qVal;
-                count++;
+        for (PlannedStep step : steps) {
+            CheapForward.applyAction(fakeState, step.getActionId());
+
+            // Simplified risk estimate
+            String actionName = step.getActionName();
+            if (actionName.equals("attack") || actionName.equals("shoot_arrow")) {
+                risk += 10.0;
+            } else if (actionName.equals("evade")) {
+                risk += 5.0;
             }
         }
 
-        return count > 0 ? sum / count : 0.0;
-    }
-
-    /**
-     * Detailed breakdown of plan risk (for debugging).
-     */
-    public String explainScore(List<PlannedStep> plan, State initialState, short goalId) {
-        if (plan == null || plan.isEmpty()) {
-            return "Invalid plan";
-        }
-
-        double deathRisk = 0.0;
-        double damage = 0.0;
-        int timeCost = 0;
-
-        CheapForward.FakeState fakeState = CheapForward.initFromState(initialState);
-        State currentState = initialState;
-
-        for (PlannedStep step : plan) {
-            RLAgent.RiskEstimate riskEst = rlAgent.estimateRisk(currentState, step.actionName);
-            deathRisk += riskEst.deathProbability;
-            damage += riskEst.expectedDamage;
-
-            CheapForward.apply(fakeState, step);
-        }
-
-        timeCost = fakeState.timeCost;
-        double goalProgress = CheapForward.goalProgress(fakeState, goalId);
-        double avgQ = getAverageQValue(plan, currentState);
-
-        return String.format(
-            "Plan Analysis:\n" +
-            "  Steps: %d\n" +
-            "  Death Risk: %.2f%%\n" +
-            "  Expected Damage: %.1f\n" +
-            "  Time Cost: %d ticks\n" +
-            "  Goal Progress: %.1f%%\n" +
-            "  Avg Q-Value: %.2f\n" +
-            "  Final Health: %d\n" +
-            "  Final Hunger: %d",
-            plan.size(),
-            deathRisk * 100,
-            damage,
-            timeCost,
-            goalProgress * 100,
-            avgQ,
-            fakeState.healthBucket,
-            fakeState.hungerBucket
-        );
-    }
-
-    /**
-     * Check if plan is safe enough to execute.
-     */
-    public boolean isSafe(List<PlannedStep> plan, State initialState, short goalId, double threshold) {
-        double score = scorePlan(plan, initialState, goalId);
-        return score < threshold;
+        double goalProgress = CheapForward.computeGoalProgress(fakeState, goalId);
+        return risk + W_TIME_COST * fakeState.timeCost + W_GOAL_PROGRESS * goalProgress;
     }
 }
 
