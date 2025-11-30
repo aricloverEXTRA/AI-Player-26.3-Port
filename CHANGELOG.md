@@ -8,6 +8,55 @@
 
 ### Major Features & Improvements
 
+#### PlaceBlock Tool for Function Calling (Nov 30, 2025)
+**Feature:** Added intelligent block placement tool that allows the AI to place blocks in the world through function calling.
+
+**What's New:**
+- **🏗️ Smart Block Placement:** AI can now place blocks at specified coordinates with full validation
+- **📦 Automatic Inventory Management:** Automatically moves required blocks from inventory to hotbar
+- **✅ Comprehensive Validation:** 
+  - Checks if bot has the block in inventory
+  - Validates placement distance (max 5 blocks)
+  - Ensures target position is empty/replaceable
+  - Finds suitable adjacent surface to place against
+  - Verifies successful placement
+- **🎯 Precise Positioning:** Uses LookController to face placement target before placing
+- **📊 Detailed Feedback:** Returns clear success/failure messages explaining what happened
+
+**How It Works:**
+1. AI requests to place a block via function calling
+2. System normalizes block type (adds `minecraft:` prefix if needed)
+3. Searches entire inventory for the requested block
+4. Moves block to hotbar if not already there
+5. Validates target position and finds adjacent surface
+6. Bot looks at the placement target
+7. Executes block placement
+8. Verifies the block was placed successfully
+
+**Use Cases:**
+- **Building Tasks:** "Place 5 stone blocks at x:100, y:64, z:200"
+- **Repairs:** "Fix this wall by placing cobblestone at the gap"
+- **Automation:** Chain with other tools for complex building sequences
+
+**Technical Details:**
+- `BlockPlacementTool.java` - Core placement logic with CompletableFuture support
+- Integrated with `ToolRegistry` and `FunctionCallerV2`
+- Supports placeholders for coordinate resolution from previous steps
+- Thread-safe async execution with 10-second timeout
+
+**Parameters:**
+- `targetX` - X coordinate for block placement
+- `targetY` - Y coordinate for block placement
+- `targetZ` - Z coordinate for block placement
+- `blockType` - Block type (e.g., "stone", "dirt", "minecraft:oak_planks")
+
+**Error Handling:**
+- ❌ "Too far from target position" - Bot needs to move closer
+- ❌ "Block not found in inventory" - Missing required item
+- ❌ "Target position already occupied" - Space is blocked
+- ❌ "No suitable surface found" - No adjacent block to place against
+- ✅ "Successfully placed [block] at x:X y:Y z:Z" - Placement confirmed
+
 #### Unified Embedding Provider System (Nov 29, 2025)
 **Feature:** Implemented comprehensive multi-provider embedding support for RAG and memory systems with fully automatic provider selection.
 

@@ -1940,4 +1940,72 @@ public class RLAgent {
         transitionHistory.clearOldTransitions(3600000); // Keep last hour
     }
 
+    /**
+     * Risk estimation for planner system.
+     * Returns detailed risk breakdown for an action.
+     */
+    public RiskEstimate estimateRisk(State state, String actionName) {
+        // Convert action name to Action enum
+        Action action;
+        try {
+            action = Action.valueOf(actionName.toUpperCase().replace(" ", "_"));
+        } catch (IllegalArgumentException e) {
+            // Unknown action, return default risk
+            return new RiskEstimate(0.1, 0.0, 5.0);
+        }
+
+        // Get base risk from calculateRisk
+        List<Action> singleAction = Collections.singletonList(action);
+        Map<Action, Double> riskMap = calculateRisk(state, singleAction, null);
+        double totalRisk = riskMap.getOrDefault(action, 10.0);
+
+        // Estimate death probability (sigmoid of risk)
+        double deathProb = 1.0 / (1.0 + Math.exp(-totalRisk / 20.0 + 2.5));
+
+        // Estimate expected damage
+        double expectedDamage = 0.0;
+        if (state.getDistanceToHostileEntity() < 5.0 && !state.getNearbyEntities().isEmpty()) {
+            expectedDamage = state.getNearbyEntities().stream()
+                .filter(EntityDetails::isHostile)
+                .mapToDouble(e -> getEntityRisk(e, 0, 0, 0) * 0.5)
+                .sum();
+        }
+
+        return new RiskEstimate(deathProb, expectedDamage, totalRisk);
+    }
+
+    /**
+     * Get Q-value for a state-action pair.
+     * Returns 0.0 if not found.
+     */
+    public double getQValue(State state, String actionName) {
+        // Convert action name to Action enum
+        Action action;
+        try {
+            action = Action.valueOf(actionName.toUpperCase().replace(" ", "_"));
+        } catch (IllegalArgumentException e) {
+            return 0.0;
+        }
+
+        StateActionPair pair = new StateActionPair(state, action);
+        QEntry entry = qTable.getEntry(pair);
+
+        return entry != null ? entry.getQValue() : 0.0;
+    }
+
+    /**
+     * Risk estimate data structure for planner.
+     */
+    public static class RiskEstimate {
+        public final double deathProbability; // 0.0 to 1.0
+        public final double expectedDamage;   // HP damage
+        public final double totalRisk;        // Overall risk score
+
+        public RiskEstimate(double deathProbability, double expectedDamage, double totalRisk) {
+            this.deathProbability = deathProbability;
+            this.expectedDamage = expectedDamage;
+            this.totalRisk = totalRisk;
+        }
+    }
+
 }

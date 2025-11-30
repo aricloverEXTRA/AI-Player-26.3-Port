@@ -179,6 +179,29 @@ public class ToolRegistry {
                             sharedState.put("webSearchQuery", result);
                         }
                     })
+            ),
+
+            new Tool(
+                    "placeBlock",
+                    """
+                    Places a block of the specified type at the given x, y, z coordinates.
+                    The bot must have the block in its inventory and must be within 5 blocks of the target position.
+                    Automatically handles inventory management (moves block to hotbar if needed).
+                    Verifies that the target position is empty and finds a suitable adjacent block to place against.
+                    """,
+                    List.of(
+                            new Tool.Parameter("targetX", "X coordinate where the block should be placed."),
+                            new Tool.Parameter("targetY", "Y coordinate where the block should be placed."),
+                            new Tool.Parameter("targetZ", "Z coordinate where the block should be placed."),
+                            new Tool.Parameter("blockType", "Type of block to place (e.g., 'stone', 'dirt', 'minecraft:oak_planks').")
+                    ),
+                    Set.of("lastPlacedBlock.x", "lastPlacedBlock.y", "lastPlacedBlock.z", "lastPlacedBlock.type"),
+                    (sharedState, paramMap, result) -> {
+                        sharedState.put("lastPlacedBlock.x", paramMap.get("targetX"));
+                        sharedState.put("lastPlacedBlock.y", paramMap.get("targetY"));
+                        sharedState.put("lastPlacedBlock.z", paramMap.get("targetZ"));
+                        sharedState.put("lastPlacedBlock.type", paramMap.get("blockType"));
+                    }
             )
     );
 

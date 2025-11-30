@@ -105,6 +105,34 @@ public class ToolVerifiers {
                 boolean success = level >= 0;
                 if (bot != null) success = success && bot.getHealth() >= 0;
                 return new VerificationResult(success, Map.of("level", level));
+            },
+            "placeBlock", (params, state, bot) -> {
+                Object xObj = state.get("lastPlacedBlock.x");
+                Object yObj = state.get("lastPlacedBlock.y");
+                Object zObj = state.get("lastPlacedBlock.z");
+                String blockType = (String) state.get("lastPlacedBlock.type");
+
+                if (!(xObj instanceof Number) || !(yObj instanceof Number) || !(zObj instanceof Number)) {
+                    return new VerificationResult(false, Map.of("error", "Missing or invalid placement position in state"));
+                }
+
+                int targetX = ((Number) xObj).intValue();
+                int targetY = ((Number) yObj).intValue();
+                int targetZ = ((Number) zObj).intValue();
+
+                // Cross-check with bot's world if available
+                boolean success = true;
+                if (bot != null) {
+                    BlockPos targetPos = new BlockPos(targetX, targetY, targetZ);
+                    var blockState = bot.getWorld().getBlockState(targetPos);
+                    // Verify block is not air (successfully placed)
+                    success = !blockState.isAir();
+                }
+
+                Map<String, Object> data = new HashMap<>();
+                data.put("coords", Map.of("x", targetX, "y", targetY, "z", targetZ));
+                data.put("blockType", blockType != null ? blockType : "unknown");
+                return new VerificationResult(success, data);
             }
     );
 }
