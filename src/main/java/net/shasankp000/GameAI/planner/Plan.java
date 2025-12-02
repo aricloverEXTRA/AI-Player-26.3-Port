@@ -24,6 +24,27 @@ public class Plan {
     }
 
     /**
+     * Get total score (risk) of the plan.
+     */
+    public double getTotalScore() {
+        return estimatedRisk;
+    }
+
+    /**
+     * Check if plan is empty.
+     */
+    public boolean isEmpty() {
+        return steps.isEmpty();
+    }
+
+    /**
+     * Get length of plan (number of steps).
+     */
+    public int length() {
+        return steps.size();
+    }
+
+    /**
      * Get plan summary for logging.
      */
     public String getSummary() {

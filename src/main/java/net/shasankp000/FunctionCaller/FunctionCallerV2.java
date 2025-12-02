@@ -64,6 +64,7 @@ import net.shasankp000.PathFinding.GoTo;
 import net.shasankp000.PathFinding.PathTracer;
 
 import net.shasankp000.PlayerUtils.*;
+
 import net.shasankp000.PlayerUtils.BlockPlacementTool;
 
 import net.shasankp000.ServiceLLMClients.LLMClient;
@@ -122,7 +123,7 @@ public class FunctionCallerV2 {
         if (markovChain == null) {
             logger.info("[planner] Initializing Markov-based planner system...");
             markovChain = new MarkovChain2();
-            planner = new Planner(markovChain, rlAgent, bot);
+            planner = new Planner(markovChain, rlAgent);
             actionLogWriter = new ActionLogWriter(markovChain, bot);
             logger.info("[planner] ✓ Planner system initialized");
         }
@@ -1624,7 +1625,8 @@ public class FunctionCallerV2 {
         }
 
         logger.info("Executing plan: {}", plan.planId);
-        logger.info("Plan has {} steps with total score: {}", plan.length(), plan.score);
+        logger.info("Plan has {} steps with total score: {}", plan.length(), plan.getTotalScore());
+
 
         List<CompletableFuture<Void>> futures = new ArrayList<>();
         
@@ -1700,56 +1702,75 @@ public class FunctionCallerV2 {
         // Map action to parameters based on action name
         String actionName = step.actionName.toLowerCase();
         
+        // Parse params string into array (comma-separated or JSON array)
+        String[] paramArray = new String[0];
+        if (step.params != null && !step.params.isEmpty()) {
+            if (step.params.startsWith("[") && step.params.endsWith("]")) {
+                // JSON array format: ["x", "y", "z"]
+                String content = step.params.substring(1, step.params.length() - 1);
+                paramArray = content.split(",");
+                for (int i = 0; i < paramArray.length; i++) {
+                    paramArray[i] = paramArray[i].trim().replaceAll("^\"|\"$", "");
+                }
+            } else {
+                // Simple comma-separated: x,y,z
+                paramArray = step.params.split(",");
+                for (int i = 0; i < paramArray.length; i++) {
+                    paramArray[i] = paramArray[i].trim();
+                }
+            }
+        }
+
         switch (actionName) {
             case "movetocoordinates":
             case "goto":
-                if (step.params.length >= 3) {
-                    params.put("x", step.params[0]);
-                    params.put("y", step.params[1]);
-                    params.put("z", step.params[2]);
+                if (paramArray.length >= 3) {
+                    params.put("x", paramArray[0]);
+                    params.put("y", paramArray[1]);
+                    params.put("z", paramArray[2]);
                     params.put("sprint", "true");
                 }
                 break;
                 
             case "mineblock":
             case "breakblock":
-                if (step.params.length >= 3) {
-                    params.put("targetX", step.params[0]);
-                    params.put("targetY", step.params[1]);
-                    params.put("targetZ", step.params[2]);
+                if (paramArray.length >= 3) {
+                    params.put("targetX", paramArray[0]);
+                    params.put("targetY", paramArray[1]);
+                    params.put("targetZ", paramArray[2]);
                 }
                 break;
                 
             case "placeblock":
-                if (step.params.length >= 4) {
-                    params.put("targetX", step.params[0]);
-                    params.put("targetY", step.params[1]);
-                    params.put("targetZ", step.params[2]);
-                    params.put("blockType", step.params[3]);
+                if (paramArray.length >= 4) {
+                    params.put("targetX", paramArray[0]);
+                    params.put("targetY", paramArray[1]);
+                    params.put("targetZ", paramArray[2]);
+                    params.put("blockType", paramArray[3]);
                 }
                 break;
                 
             case "detectblocks":
-                if (step.params.length >= 1) {
-                    params.put("blockType", step.params[0]);
+                if (paramArray.length >= 1) {
+                    params.put("blockType", paramArray[0]);
                 }
                 break;
                 
             case "turn":
-                if (step.params.length >= 1) {
-                    params.put("direction", step.params[0]);
+                if (paramArray.length >= 1) {
+                    params.put("direction", paramArray[0]);
                 }
                 break;
                 
             case "look":
-                if (step.params.length >= 1) {
-                    params.put("cardinalDirection", step.params[0]);
+                if (paramArray.length >= 1) {
+                    params.put("cardinalDirection", paramArray[0]);
                 }
                 break;
                 
             case "websearch":
-                if (step.params.length >= 1) {
-                    params.put("query", step.params[0]);
+                if (paramArray.length >= 1) {
+                    params.put("query", paramArray[0]);
                 }
                 break;
                 

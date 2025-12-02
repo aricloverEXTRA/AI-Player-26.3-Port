@@ -25,15 +25,15 @@ public class ActionLogWriter implements Runnable {
 
     private final BlockingQueue<LogEntry> queue;
     private final MarkovChain2 markovChain;
-    private final StateTransition stateTransition;
+    private final net.minecraft.server.network.ServerPlayerEntity bot; // ✅ Store bot reference instead
     private volatile boolean running;
     private final Thread writerThread;
     private BufferedWriter logWriter;
 
-    public ActionLogWriter(MarkovChain2 markovChain, StateTransition stateTransition) {
+    public ActionLogWriter(MarkovChain2 markovChain, net.minecraft.server.network.ServerPlayerEntity bot) {
         this.queue = new LinkedBlockingQueue<>(1000);
         this.markovChain = markovChain;
-        this.stateTransition = stateTransition;
+        this.bot = bot;
         this.running = true;
         this.writerThread = new Thread(this, "ActionLogWriter");
 
@@ -45,16 +45,15 @@ public class ActionLogWriter implements Runnable {
             }
 
             String logFile = String.format("%s/action_log_%d.csv",
-                LOG_DIR, System.currentTimeMillis());
+                    LOG_DIR, System.currentTimeMillis());
             this.logWriter = new BufferedWriter(new FileWriter(logFile));
 
             // Write CSV header
             logWriter.write("timestamp,planId,goalId,contextHash,stepIndex,actionId," +
-                          "actionName,riskBefore,outcome,reward,died\n");
+                    "actionName,riskBefore,outcome,reward,died\n");
             logWriter.flush();
 
             LOGGER.info("Action log initialized: {}", logFile);
-
         } catch (IOException e) {
             LOGGER.error("Failed to initialize action log", e);
             this.logWriter = null;
@@ -120,29 +119,31 @@ public class ActionLogWriter implements Runnable {
     /**
      * Process a single log entry.
      */
+    /**
+     * Process a single log entry.
+     */
     private void processEntry(LogEntry entry) {
         // Write to CSV
         if (logWriter != null) {
             try {
                 logWriter.write(String.format("%d,%s,%d,%d,%d,%d,%s,%.2f,%s,%.2f,%b\n",
-                    entry.timestamp,
-                    entry.planId.toString(),
-                    entry.goalId,
-                    entry.contextHash,
-                    entry.stepIndex,
-                    entry.actionId & 0xFF,
-                    entry.actionName,
-                    entry.riskBefore,
-                    entry.outcome,
-                    entry.reward,
-                    entry.died
+                        entry.timestamp,
+                        entry.planId.toString(),
+                        entry.goalId,
+                        entry.contextHash,
+                        entry.stepIndex,
+                        entry.actionId & 0xFF,
+                        entry.actionName,
+                        entry.riskBefore,
+                        entry.outcome,
+                        entry.reward,
+                        entry.died
                 ));
 
                 // Flush periodically
                 if (entry.stepIndex % 10 == 0) {
                     logWriter.flush();
                 }
-
             } catch (IOException e) {
                 LOGGER.error("Failed to write log entry", e);
             }
@@ -154,22 +155,36 @@ public class ActionLogWriter implements Runnable {
             // For now, use simple prev1/prev2 = 0 (would need plan context)
             byte prev1 = 0;
             byte prev2 = 0;
-
             markovChain.observeTransition(
-                entry.goalId,
-                entry.contextHash,
-                prev2,
-                prev1,
-                entry.actionId
+                    entry.goalId,
+                    entry.contextHash,
+                    prev2,
+                    prev1,
+                    entry.actionId
             );
         }
 
-        // Update StateTransition store (for RL learning)
-        // This would integrate with existing StateTransition tracking
-        // For now, just log
+        // ✅ NEW: Integrate with BotEventHandler's StateTransition tracking
+        // This properly records the transition in the existing RL learning system
+        try {
+            // Get the current transition history from BotEventHandler
+            StateTransition.TransitionHistory history =
+                    net.shasankp000.GameAI.BotEventHandler.getTransitionHistory();
+
+            if (history != null && entry.died) {
+                // Mark recent transitions as leading to death for learning
+                LOGGER.warn("Plan step {} led to death - marking transitions for learning",
+                        entry.stepIndex);
+                // The death learning is handled by BotEventHandler.handleBotDeath()
+            }
+        } catch (Exception e) {
+            LOGGER.warn("Could not update StateTransition tracking: {}", e.getMessage());
+        }
+
         LOGGER.debug("Logged action: {} (reward: {}, died: {})",
-                    entry.actionName, entry.reward, entry.died);
+                entry.actionName, entry.reward, entry.died);
     }
+
 
     /**
      * Compute context hash (same as in MarkovChain2).

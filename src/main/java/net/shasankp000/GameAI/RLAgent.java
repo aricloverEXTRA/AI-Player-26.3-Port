@@ -1998,8 +1998,9 @@ public class RLAgent {
      * Creates a new State from the bot's current status.
      */
     public State getCurrentState(net.minecraft.server.network.ServerPlayerEntity bot) {
-        return new State(bot, bot.getServer());
+        return net.shasankp000.GameAI.BotEventHandler.createInitialState(bot);
     }
+
 
     /**
      * Risk estimate data structure for planner.

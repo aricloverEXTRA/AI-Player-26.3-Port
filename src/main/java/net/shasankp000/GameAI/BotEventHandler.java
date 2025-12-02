@@ -1738,24 +1738,27 @@ public class BotEventHandler {
     }
 
     /**
+     * Get the transition history for external systems (e.g., planner)
+     */
+    public static StateTransition.TransitionHistory getTransitionHistory() {
+        return transitionHistory;
+    }
+
+
+    /**
      * Get the RLAgent instance for the given bot
      * This creates a new RLAgent with the current state
      */
     public static RLAgent getRLAgent(ServerPlayerEntity bot) {
-        if (currentState == null) {
-            currentState = new State(bot, server);
-        }
-        return new RLAgent(currentState, DEFAULT_RISK_APPETITE);
+        return new RLAgent(); // gives a new hook into the RL agent system to get the current state and access Qtable
     }
 
-    /**
-     * Get the current State for the given bot
-     */
     public static State getCurrentState(ServerPlayerEntity bot) {
         if (currentState == null) {
-            currentState = new State(bot, server);
+            currentState = createInitialState(bot);  // ✅ Use the existing method
         }
         return currentState;
     }
+
 }
 
