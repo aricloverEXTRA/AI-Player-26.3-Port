@@ -122,6 +122,10 @@ public class FunctionCallerV2 {
     public static void initializePlanner(ServerPlayerEntity bot, net.shasankp000.GameAI.RLAgent rlAgent) {
         if (markovChain == null) {
             logger.info("[planner] Initializing Markov-based planner system...");
+
+            // Ensure ActionRegistry is populated from ToolRegistry
+            ActionRegistry.refreshFromToolRegistry();
+
             markovChain = new MarkovChain2();
             planner = new Planner(markovChain, rlAgent);
             actionLogWriter = new ActionLogWriter(markovChain, bot);
@@ -137,13 +141,18 @@ public class FunctionCallerV2 {
      * @param currentState Current bot state
      * @param bot Bot entity
      * @param rlAgent RL agent for state management
+     * @param botSource Bot's command source (required for function execution)
      * @return CompletableFuture that completes when plan execution finishes
      */
     public static CompletableFuture<Boolean> handleUserGoal(
             String naturalLanguageGoal,
             State currentState,
             ServerPlayerEntity bot,
-            net.shasankp000.GameAI.RLAgent rlAgent) {
+            net.shasankp000.GameAI.RLAgent rlAgent,
+            ServerCommandSource botSource) {
+
+        // ✅ Store botSource for function execution
+        FunctionCallerV2.botSource = botSource;
 
         // Ensure planner is initialized
         if (planner == null) {
@@ -416,6 +425,39 @@ public class FunctionCallerV2 {
         private static void webSearch(String query) {
             System.out.println("Running web search...");
             getFunctionOutput("Web search result: " + WebSearchTool.search(query));
+        }
+
+        /** searchBlocks: efficiently search for blocks in expanding radius **/
+        private static void searchBlocks(String blockType, int initialRadius, int maxRadius, int radiusIncrement) {
+            System.out.println("Searching for " + blockType + " in radius " + initialRadius + "-" + maxRadius);
+            if (botSource == null || botSource.getPlayer() == null) {
+                getFunctionOutput("Bot not found.");
+                return;
+            }
+            try {
+                ServerPlayerEntity bot = botSource.getPlayer();
+                BlockPos result = net.shasankp000.Tools.SearchBlocks.searchBlock(
+                        bot,
+                        blockType,
+                        initialRadius,
+                        maxRadius,
+                        radiusIncrement
+                );
+
+                if (result != null) {
+                    getFunctionOutput(String.format("Found %s at x: %d y: %d z: %d (distance: %d blocks)",
+                            blockType,
+                            result.getX(),
+                            result.getY(),
+                            result.getZ(),
+                            bot.getBlockPos().getManhattanDistance(result)));
+                } else {
+                    getFunctionOutput(String.format("No %s found within %d blocks", blockType, maxRadius));
+                }
+            } catch (Exception e) {
+                logger.error("Error in searchBlocks: ", e);
+                getFunctionOutput("Failed to search for blocks: " + e.getMessage());
+            }
         }
 
         private static void sendMessageToChat(String message) {
@@ -1509,6 +1551,8 @@ public class FunctionCallerV2 {
 
     private static CompletableFuture<Void> callFunction(String functionName, Map<String, String> paramMap) {
         return CompletableFuture.runAsync(() -> {
+            logger.info("🔧 callFunction: {} with params: {}", functionName, paramMap);
+
             switch (functionName) {
                 case "goTo" -> {
                     int x = Integer.parseInt(resolvePlaceholder(paramMap.get("x")));
@@ -1609,8 +1653,19 @@ public class FunctionCallerV2 {
                     logger.info("Calling method: webSearch with query='{}'", query);
                     Tools.webSearch(query);
                 }
+                case "searchBlocks" -> {
+                    String blockType = resolvePlaceholder(paramMap.get("blockType"));
+                    int initialRadius = Integer.parseInt(resolvePlaceholder(paramMap.get("initialRadius")));
+                    int maxRadius = Integer.parseInt(resolvePlaceholder(paramMap.get("maxRadius")));
+                    int radiusIncrement = Integer.parseInt(resolvePlaceholder(paramMap.get("radiusIncrement")));
+                    logger.info("Calling method: searchBlocks with blockType={} initialRadius={} maxRadius={} increment={}",
+                            blockType, initialRadius, maxRadius, radiusIncrement);
+                    Tools.searchBlocks(blockType, initialRadius, maxRadius, radiusIncrement);
+                }
                 default -> logger.warn("Unknown function: {}", functionName);
             }
+
+            logger.info("✓ Function {} execution completed", functionName);
         });
     }
 
@@ -1624,65 +1679,71 @@ public class FunctionCallerV2 {
             return CompletableFuture.completedFuture(false);
         }
 
+        if (botSource == null) {
+            logger.error("Cannot execute plan: botSource is null! Bot not initialized properly.");
+            return CompletableFuture.completedFuture(false);
+        }
+
         logger.info("Executing plan: {}", plan.planId);
         logger.info("Plan has {} steps with total score: {}", plan.length(), plan.getTotalScore());
 
+        // Debug: Log all step names
+        for (int i = 0; i < plan.steps.size(); i++) {
+            PlannedStep step = plan.steps.get(i);
+            logger.debug("  Step {}: {} (byte: {})", i + 1, step.actionName, step.actionId & 0xFF);
+        }
 
-        List<CompletableFuture<Void>> futures = new ArrayList<>();
-        
+        // ✅ Execute steps SEQUENTIALLY using reduce, not in parallel
+        CompletableFuture<Void> sequentialExecution = CompletableFuture.completedFuture(null);
+
         for (int i = 0; i < plan.steps.size(); i++) {
             PlannedStep step = plan.steps.get(i);
             final int stepIndex = i;
-            
-            // Convert PlannedStep to function call
-            Map<String, String> params = convertStepToParams(step);
-            
-            CompletableFuture<Void> stepFuture = callFunction(step.actionName, params)
-                .thenRun(() -> {
-                    // Log successful execution
-                    if (logWriter != null) {
-                        logWriter.logStep(
-                            plan.planId,
-                            plan.goalId,
-                            initialState,
-                            stepIndex,
-                            step,
-                            "success",
-                            10.0, // Reward for success
-                            false  // Did not die
-                        );
-                    }
-                    logger.info("✓ Step {}/{}: {} completed", 
-                               stepIndex + 1, plan.length(), step.actionName);
-                })
-                .exceptionally(ex -> {
-                    // Log failure
-                    if (logWriter != null) {
-                        logWriter.logStep(
-                            plan.planId,
-                            plan.goalId,
-                            initialState,
-                            stepIndex,
-                            step,
-                            "failed: " + ex.getMessage(),
-                            -10.0, // Penalty for failure
-                            false
-                        );
-                    }
-                    logger.error("✗ Step {}/{}: {} failed: {}", 
-                                stepIndex + 1, plan.length(), step.actionName, ex.getMessage());
-                    return null;
-                });
-            
-            futures.add(stepFuture);
+
+            sequentialExecution = sequentialExecution.thenCompose(_void -> {
+                // Convert PlannedStep to function call
+                Map<String, String> params = convertStepToParams(step);
+
+                return callFunction(step.actionName, params)
+                    .thenRun(() -> {
+                        // Log successful execution
+                        if (logWriter != null) {
+                            logWriter.logStep(
+                                plan.planId,
+                                plan.goalId,
+                                initialState,
+                                stepIndex,
+                                step,
+                                "success",
+                                10.0, // Reward for success
+                                false  // Did not die
+                            );
+                        }
+                        logger.info("✓ Step {}/{}: {} completed",
+                                   stepIndex + 1, plan.length(), step.actionName);
+                    })
+                    .exceptionally(ex -> {
+                        // Log failure
+                        if (logWriter != null) {
+                            logWriter.logStep(
+                                plan.planId,
+                                plan.goalId,
+                                initialState,
+                                stepIndex,
+                                step,
+                                "failed: " + ex.getMessage(),
+                                -10.0, // Penalty for failure
+                                false
+                            );
+                        }
+                        logger.error("✗ Step {}/{}: {} failed: {}",
+                                    stepIndex + 1, plan.length(), step.actionName, ex.getMessage());
+                        return null;
+                    });
+            });
         }
 
-        // Execute all steps sequentially
-        CompletableFuture<Void> allSteps = CompletableFuture.allOf(
-            futures.toArray(new CompletableFuture[0])
-        );
-
-        return allSteps.handle((result, ex) -> {
+        return sequentialExecution.handle((result, ex) -> {
             if (ex != null) {
                 logger.error("Plan execution failed: {}", ex.getMessage());
                 return false;
@@ -1704,31 +1765,35 @@ public class FunctionCallerV2 {
         
         // Parse params string into array (comma-separated or JSON array)
         String[] paramArray = new String[0];
-        if (step.params != null && !step.params.isEmpty()) {
-            if (step.params.startsWith("[") && step.params.endsWith("]")) {
+        if (step.params != null && !step.params.trim().isEmpty()) {
+            String trimmedParams = step.params.trim();
+            if (trimmedParams.startsWith("[") && trimmedParams.endsWith("]")) {
                 // JSON array format: ["x", "y", "z"]
-                String content = step.params.substring(1, step.params.length() - 1);
-                paramArray = content.split(",");
-                for (int i = 0; i < paramArray.length; i++) {
-                    paramArray[i] = paramArray[i].trim().replaceAll("^\"|\"$", "");
+                String content = trimmedParams.substring(1, trimmedParams.length() - 1);
+                if (!content.trim().isEmpty()) {
+                    paramArray = content.split(",");
+                    for (int i = 0; i < paramArray.length; i++) {
+                        paramArray[i] = paramArray[i].trim().replaceAll("^\"|\"$", "");
+                    }
                 }
             } else {
                 // Simple comma-separated: x,y,z
-                paramArray = step.params.split(",");
+                paramArray = trimmedParams.split(",");
                 for (int i = 0; i < paramArray.length; i++) {
                     paramArray[i] = paramArray[i].trim();
                 }
             }
         }
 
+        // Normalize action name for comparison (case-insensitive)
         switch (actionName) {
-            case "movetocoordinates":
             case "goto":
+            case "movetocoordinates":
                 if (paramArray.length >= 3) {
                     params.put("x", paramArray[0]);
                     params.put("y", paramArray[1]);
                     params.put("z", paramArray[2]);
-                    params.put("sprint", "true");
+                    params.put("sprint", paramArray.length >= 4 ? paramArray[3] : "true");
                 }
                 break;
                 
@@ -1747,6 +1812,8 @@ public class FunctionCallerV2 {
                     params.put("targetY", paramArray[1]);
                     params.put("targetZ", paramArray[2]);
                     params.put("blockType", paramArray[3]);
+                } else if (paramArray.length >= 1) {
+                    params.put("blockType", paramArray[0]);
                 }
                 break;
                 
@@ -1759,12 +1826,16 @@ public class FunctionCallerV2 {
             case "turn":
                 if (paramArray.length >= 1) {
                     params.put("direction", paramArray[0]);
+                } else {
+                    params.put("direction", "left"); // Default
                 }
                 break;
                 
             case "look":
                 if (paramArray.length >= 1) {
                     params.put("cardinalDirection", paramArray[0]);
+                } else {
+                    params.put("cardinalDirection", "north"); // Default
                 }
                 break;
                 
@@ -1774,20 +1845,23 @@ public class FunctionCallerV2 {
                 }
                 break;
                 
-            // Actions with no parameters
+            // Actions with no parameters (handled by bot commands)
             case "eat":
             case "attack":
             case "shoot":
             case "evade":
             case "retreat":
+            case "shield":
             case "gethealthlevel":
             case "gethungerlevel":
             case "getoxygenlevel":
-                // No parameters needed
+                // No parameters needed - these are simple bot commands
                 break;
                 
             default:
-                logger.warn("Unknown action type for parameter conversion: {}", actionName);
+                // If action not recognized, log warning but don't fail
+                // The action might still be valid in the function caller
+                logger.debug("No parameter mapping for action: {}", actionName);
         }
         
         return params;

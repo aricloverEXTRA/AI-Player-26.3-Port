@@ -23,56 +23,52 @@ public class MarkovChain2 {
     // Key = (goalId, contextHash, prev2, prev1) -> Value = action counts
     private final ConcurrentHashMap<MarkovKey, MarkovStats> transitions;
 
-    // Action registry (actionId -> name mapping)
-    private final Map<Byte, String> actionRegistry;
-
     // Random for sampling
     private final Random random;
 
+    // Shared state for parameter generation
+    private final Map<String, Object> sharedState;
+
     public MarkovChain2() {
         this.transitions = new ConcurrentHashMap<>(10000);
-        this.actionRegistry = new HashMap<>();
         this.random = new Random();
+        this.sharedState = new ConcurrentHashMap<>();
 
-        // Initialize action registry
-        initializeActionRegistry();
+        // Ensure ActionRegistry is initialized
+        ActionRegistry.ensureInitialized();
+
+        // Verify registry has actions
+        int registeredCount = ActionRegistry.getAllActionBytes().size();
+        LOGGER.info("MarkovChain2 initialized with {} registered actions", registeredCount);
+        if (registeredCount <= 1) {
+            LOGGER.error("⚠ ActionRegistry has very few actions! Planning may fail.");
+        }
 
         // Try to load existing data
         loadFromDisk();
     }
 
+
     /**
-     * Initialize action ID mappings (matches PlannedStep actions).
+     * Update shared state with goal-specific context.
+     * This allows parameter generation to use relevant data.
      */
-    private void initializeActionRegistry() {
-        // Core actions
-        actionRegistry.put((byte) 0, "idle");
-        actionRegistry.put((byte) 1, "move_forward");
-        actionRegistry.put((byte) 2, "move_backward");
-        actionRegistry.put((byte) 3, "turn_left");
-        actionRegistry.put((byte) 4, "turn_right");
-        actionRegistry.put((byte) 5, "jump");
-        actionRegistry.put((byte) 6, "sneak");
-        actionRegistry.put((byte) 7, "sprint");
+    public void updateSharedState(String key, Object value) {
+        sharedState.put(key, value);
+    }
 
-        // Combat actions
-        actionRegistry.put((byte) 10, "attack");
-        actionRegistry.put((byte) 11, "shoot_arrow");
-        actionRegistry.put((byte) 12, "use_shield");
-        actionRegistry.put((byte) 13, "evade");
+    /**
+     * Get value from shared state.
+     */
+    public Object getSharedState(String key) {
+        return sharedState.get(key);
+    }
 
-        // Utility actions
-        actionRegistry.put((byte) 20, "mine_block");
-        actionRegistry.put((byte) 21, "place_block");
-        actionRegistry.put((byte) 22, "eat_food");
-        actionRegistry.put((byte) 23, "equip_armor");
-        actionRegistry.put((byte) 24, "craft_item");
-        actionRegistry.put((byte) 25, "use_torch");
-
-        // Hotbar actions
-        for (int i = 1; i <= 9; i++) {
-            actionRegistry.put((byte) (30 + i), "hotbar_" + i);
-        }
+    /**
+     * Clear shared state (useful between different goals).
+     */
+    public void clearSharedState() {
+        sharedState.clear();
     }
 
     /**
@@ -88,19 +84,75 @@ public class MarkovChain2 {
         List<PlannedStep> plan = new ArrayList<>();
         int contextHash = computeContextHash(context);
 
-        byte prev2 = 0; // Initial "null" actions
-        byte prev1 = 0;
+        // Set up goal-specific context in shared state
+        String goalName = GoalMapper.getGoalName(goalId);
+        if (goalName.equalsIgnoreCase("gather")) {
+            // For gather goals, set target block type
+            sharedState.put("targetBlockType", "minecraft:oak_log");
+        }
 
-        for (int i = 0; i < maxLen; i++) {
+        // Get relevant actions for this goal
+        String goalName = GoalMapper.getGoalName(goalId);
+        List<Byte> relevantActions = ActionRegistry.getRelevantActions(goalId, goalName);
+
+        if (relevantActions.isEmpty()) {
+            LOGGER.warn("No relevant actions found for goal: {}", goalName);
+            return plan;
+        }
+
+        // Filter out any invalid actions (shouldn't happen but safety check)
+        relevantActions.removeIf(actionId -> {
+            String funcName = ActionRegistry.getFunctionName(actionId);
+            boolean isInvalid = funcName.equals("unknown") || funcName.startsWith("unknown_");
+            if (isInvalid) {
+                LOGGER.warn("Filtered out invalid action byte: {}", actionId & 0xFF);
+            }
+            return isInvalid;
+        });
+
+        if (relevantActions.isEmpty()) {
+            LOGGER.error("All relevant actions were invalid for goal: {}", goalName);
+            return plan;
+        }
+
+        LOGGER.debug("Planning for goal '{}' with {} relevant actions", goalName, relevantActions.size());
+
+        // For gathering goals, ensure detectBlocks comes before mineBlock
+        if (goalId == 6) { // GATHER goal
+            byte detectBlocksAction = ActionRegistry.getActionByte("detectBlocks");
+            if (detectBlocksAction != ActionRegistry.ACTION_UNKNOWN && relevantActions.contains(detectBlocksAction)) {
+                // Start with detectBlocks for gathering
+                String params = generateDefaultParams("detectBlocks", context);
+                plan.add(new PlannedStep(detectBlocksAction, "detectBlocks", 0.0, params));
+                LOGGER.debug("Added detectBlocks as first step for gather goal");
+            }
+        }
+
+        byte prev2 = plan.size() < 2 ? (byte) 0 : plan.get(plan.size() - 2).actionId;
+        byte prev1 = plan.isEmpty() ? (byte) 0 : plan.get(plan.size() - 1).actionId;
+
+        int attempts = 0;
+        int maxAttempts = maxLen * 3; // Allow some retries for skipped pointless actions
+
+        while (plan.size() < maxLen && attempts < maxAttempts) {
+            attempts++;
+
             byte nextAction;
 
             // Epsilon-greedy: explore vs exploit
             if (random.nextDouble() < epsilon) {
-                // Random exploration
-                nextAction = (byte) random.nextInt(40); // 0-39 action range
+                // Random exploration from relevant actions
+                nextAction = relevantActions.get(random.nextInt(relevantActions.size()));
             } else {
-                // Sample from Markov chain
-                nextAction = sampleNextAction(goalId, contextHash, prev2, prev1);
+                // Sample from Markov chain (restricted to relevant actions)
+                nextAction = sampleNextAction(goalId, contextHash, prev2, prev1, relevantActions);
+            }
+
+            // Verify action is valid before adding
+            String actionName = ActionRegistry.getFunctionName(nextAction);
+            if (actionName.equals("unknown") || actionName.startsWith("unknown_")) {
+                LOGGER.warn("Sampled invalid action byte {}, retrying", nextAction & 0xFF);
+                continue;
             }
 
             // Check if action is pointless in current context
@@ -108,9 +160,21 @@ public class MarkovChain2 {
                 continue; // Skip and try next
             }
 
-            // Add to plan
-            String actionName = actionRegistry.getOrDefault(nextAction, "unknown_" + nextAction);
-            plan.add(new PlannedStep(nextAction, actionName, 0.0, null));
+            // Enforce dependencies: can't mine without detecting first (for gather goals)
+            if (goalId == 6 && actionName.equalsIgnoreCase("mineBlock")) {
+                // Check if we've already detected blocks
+                boolean hasDetected = plan.stream()
+                    .anyMatch(step -> step.actionName.equalsIgnoreCase("detectBlocks"));
+
+                if (!hasDetected) {
+                    // Skip mineBlock for now, it will be added after detectBlocks
+                    continue;
+                }
+            }
+
+            // Add to plan with context-appropriate parameters
+            String params = generateDefaultParams(actionName, context);
+            plan.add(new PlannedStep(nextAction, actionName, 0.0, params));
 
             // Update history
             prev2 = prev1;
@@ -122,29 +186,147 @@ public class MarkovChain2 {
             }
         }
 
+        if (plan.isEmpty()) {
+            LOGGER.warn("Failed to generate any valid actions for goal: {}", goalName);
+        }
+
         return plan;
     }
 
     /**
-     * Sample next action from Markov distribution.
+     * Generate default parameters for an action based on context.
+     * Returns a comma-separated string or JSON array format.
+     *
+     * IMPORTANT: For goal-driven planning, we should use searchBlocks → goTo → mineBlock
+     * sequence for gathering tasks.
      */
-    private byte sampleNextAction(short goalId, int contextHash, byte prev2, byte prev1) {
+    private String generateDefaultParams(String actionName, State context) {
+        switch (actionName.toLowerCase()) {
+            case "goto":
+            case "movetocoordinates":
+                // Check if we have a found block from searchBlocks
+                Object foundX = sharedState.get("foundBlock.x");
+                if (foundX != null) {
+                    // Use the found block location
+                    Object foundY = sharedState.get("foundBlock.y");
+                    Object foundZ = sharedState.get("foundBlock.z");
+                    return String.format("%s,%s,%s,true", foundX, foundY, foundZ);
+                }
+                // Use a nearby location from context
+                return String.format("%d,%d,%d,true",
+                    context.getBotX() + 2, context.getBotY(), context.getBotZ());
+
+            case "mineblock":
+            case "breakblock":
+                // Check if we have a found block from searchBlocks
+                Object targetX = sharedState.get("foundBlock.x");
+                if (targetX != null) {
+                    Object targetY = sharedState.get("foundBlock.y");
+                    Object targetZ = sharedState.get("foundBlock.z");
+                    return String.format("%s,%s,%s", targetX, targetY, targetZ);
+                }
+                // Fallback: position 2 blocks in front of the bot
+                return String.format("%d,%d,%d",
+                    context.getBotX() + 2, context.getBotY(), context.getBotZ());
+
+            case "searchblocks":
+                // For gathering goals, search for wood by default
+                // Check shared state for what we're looking for
+                Object targetBlock = sharedState.get("targetBlockType");
+                String blockType = (targetBlock != null) ? targetBlock.toString() : "minecraft:oak_log";
+                // Use expanding radius: start at 10, max 100, increment 20
+                return String.format("%s,10,100,20", blockType);
+
+            case "placeblock":
+                // Default to dirt block at a valid position
+                return String.format("%d,%d,%d,minecraft:dirt",
+                    context.getBotX() + 1, context.getBotY() - 1, context.getBotZ());
+
+            case "look":
+                // Default: look north
+                return "north";
+
+            case "turn":
+                // Default: turn right
+                return "right";
+
+            case "navigateto":
+                // Default: navigate forward
+                return String.format("%d,%d,%d",
+                    context.getBotX() + 5, context.getBotY(), context.getBotZ());
+
+            case "websearch":
+                // For gathering goals, search for relevant info
+                return "how to find wood in minecraft";
+
+            case "detectblocks":
+                // For gathering goals, detect wood/logs
+                // This should be goal-dependent but defaulting to oak_log for now
+                return "minecraft:oak_log";
+
+            case "gethungerlevel":
+            case "gethealthlevel":
+            case "getoxygenlevel":
+                // These don't need parameters
+                return "";
+
+            default:
+                // For unknown/status actions - no params
+                return "";
+        }
+    }
+
+    /**
+     * Sample next action from Markov distribution (restricted to relevant actions).
+     */
+    private byte sampleNextAction(short goalId, int contextHash, byte prev2, byte prev1, List<Byte> relevantActions) {
+        if (relevantActions.isEmpty()) {
+            LOGGER.error("Cannot sample from empty relevant actions list");
+            return ActionRegistry.ACTION_UNKNOWN;
+        }
+
         MarkovKey key = new MarkovKey(goalId, contextHash, prev2, prev1);
         MarkovStats stats = transitions.get(key);
 
         if (stats == null || stats.total == 0) {
-            // No data, return random action
-            return (byte) random.nextInt(40);
+            // No data, return random relevant action
+            byte action = relevantActions.get(random.nextInt(relevantActions.size()));
+
+            // Validate before returning
+            String funcName = ActionRegistry.getFunctionName(action);
+            if (funcName.equals("unknown") || funcName.startsWith("unknown_")) {
+                LOGGER.warn("Selected invalid action from relevant list: byte {}", action & 0xFF);
+                // Find first valid action
+                for (byte a : relevantActions) {
+                    String name = ActionRegistry.getFunctionName(a);
+                    if (!name.equals("unknown") && !name.startsWith("unknown_")) {
+                        return a;
+                    }
+                }
+                LOGGER.error("No valid actions in relevant list!");
+                return ActionRegistry.ACTION_UNKNOWN;
+            }
+
+            return action;
         }
 
-        // Compute smoothed probabilities
-        int vocabSize = 40; // Number of possible actions
+        // Compute smoothed probabilities (only for relevant actions)
+        int vocabSize = relevantActions.size();
         double[] probs = new double[vocabSize];
         double sumProbs = 0.0;
 
         for (int i = 0; i < vocabSize; i++) {
+            byte actionId = relevantActions.get(i);
+            int actionIndex = actionId & 0xFF;
+
+            // Safety check for array bounds
+            int count = 0;
+            if (actionIndex < stats.counts.length) {
+                count = stats.counts[actionIndex];
+            }
+
             // Add-1 smoothing: P(action) = (count + alpha) / (total + alpha * vocab_size)
-            probs[i] = (stats.counts[i] + SMOOTHING_ALPHA) / (stats.total + SMOOTHING_ALPHA * vocabSize);
+            probs[i] = (count + SMOOTHING_ALPHA) / (stats.total + SMOOTHING_ALPHA * vocabSize);
             sumProbs += probs[i];
         }
 
@@ -155,12 +337,30 @@ public class MarkovChain2 {
         for (int i = 0; i < vocabSize; i++) {
             cumulative += probs[i];
             if (rand <= cumulative) {
-                return (byte) i;
+                byte selectedAction = relevantActions.get(i);
+
+                // Validate before returning
+                String funcName = ActionRegistry.getFunctionName(selectedAction);
+                if (funcName.equals("unknown") || funcName.startsWith("unknown_")) {
+                    LOGGER.warn("Markov sampled invalid action: byte {}, resampling", selectedAction & 0xFF);
+                    continue; // Try next in distribution
+                }
+
+                return selectedAction;
             }
         }
 
-        // Fallback (should not reach here)
-        return (byte) (vocabSize - 1);
+        // Fallback - find first valid action
+        for (byte a : relevantActions) {
+            String name = ActionRegistry.getFunctionName(a);
+            if (!name.equals("unknown") && !name.startsWith("unknown_")) {
+                return a;
+            }
+        }
+
+        // Ultimate fallback
+        LOGGER.error("Failed to find any valid action to sample");
+        return ActionRegistry.ACTION_UNKNOWN;
     }
 
     /**
@@ -171,10 +371,16 @@ public class MarkovChain2 {
 
         transitions.compute(key, (k, stats) -> {
             if (stats == null) {
-                stats = new MarkovStats(40); // 40 possible actions
+                // Use 128 to cover all possible byte values (0-127)
+                stats = new MarkovStats(128);
             }
-            stats.counts[action & 0xFF]++;
-            stats.total++;
+            int actionIndex = action & 0xFF;
+            if (actionIndex < stats.counts.length) {
+                stats.counts[actionIndex]++;
+                stats.total++;
+            } else {
+                LOGGER.warn("Action index {} out of bounds for counts array size {}", actionIndex, stats.counts.length);
+            }
             return stats;
         });
     }
@@ -196,22 +402,24 @@ public class MarkovChain2 {
      * Check if action is pointless in current context.
      */
     private boolean isPointlessAction(State context, byte actionId) {
-        int id = actionId & 0xFF;
+        String functionName = ActionRegistry.getFunctionName(actionId);
 
         // Don't eat if hunger is full
-        if (id == 22 && context.getBotHungerLevel() >= 19) {
+        if (functionName.equals("eat") && context.getBotHungerLevel() >= 19) {
             return true;
         }
 
-        // Don't sprint if already sprinting (would need more state tracking)
         // Don't shield if no enemies nearby
-        if (id == 12 && context.getNearbyEntities().stream()
+        if (functionName.equals("shield") && context.getNearbyEntities().stream()
                 .noneMatch(e -> e.isHostile())) {
             return true;
         }
 
-        // Don't idle too much (limit consecutive idles)
-        // This would need sequence history
+        // Don't attack if no enemies nearby
+        if (functionName.equals("attack") && context.getNearbyEntities().stream()
+                .noneMatch(e -> e.isHostile())) {
+            return true;
+        }
 
         return false;
     }
@@ -290,7 +498,7 @@ public class MarkovChain2 {
      */
     public String getStats() {
         return String.format("Markov transitions: %d entries, %d actions registered",
-                transitions.size(), actionRegistry.size());
+                transitions.size(), ActionRegistry.getAllActionBytes().size());
     }
 
     // ===== INNER CLASSES =====

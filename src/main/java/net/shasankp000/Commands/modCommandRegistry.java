@@ -513,7 +513,7 @@ public class modCommandRegistry {
                                                     ChatUtils.sendChatMessages(botSource, "Planning: " + goal + "...");
 
                                                     // Execute plan asynchronously
-                                                    net.shasankp000.FunctionCaller.FunctionCallerV2.handleUserGoal(goal, currentState, bot, rlAgent)
+                                                    net.shasankp000.FunctionCaller.FunctionCallerV2.handleUserGoal(goal, currentState, bot, rlAgent, botSource)
                                                             .thenAccept(success -> {
                                                                 server.execute(() -> {
                                                                     if (success) {

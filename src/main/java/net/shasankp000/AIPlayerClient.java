@@ -174,7 +174,7 @@ public class AIPlayerClient implements ClientModInitializer {
                 } else {
 
                     switch (llmProvider) {
-                        case "openai", "gpt", "google", "gemini", "anthropic", "claude", "xAI", "xai", "grok":
+                        case "openai", "gpt", "google", "gemini", "anthropic", "claude", "xAI", "xai", "grok", "custom":
                             LLMClient llmClient = LLMClientFactory.createClient(llmProvider);
 
                             if (llmClient!=null) {

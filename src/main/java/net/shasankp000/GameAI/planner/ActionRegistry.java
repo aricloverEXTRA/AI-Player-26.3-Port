@@ -1,5 +1,7 @@
 package net.shasankp000.GameAI.planner;
 
+import net.shasankp000.FunctionCaller.Tool;
+import net.shasankp000.FunctionCaller.ToolRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -7,185 +9,286 @@ import java.util.*;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Registry of all available actions for the planner.
- * Maps action IDs to action metadata and provides sampling utilities.
+ * Maps action byte IDs (0-255) to function names and vice versa.
+ * Integrates with ToolRegistry to ensure consistency.
  */
 public class ActionRegistry {
-    private static final Logger LOGGER = LoggerFactory.getLogger("planner");
+    private static final Logger LOGGER = LoggerFactory.getLogger("ActionRegistry");
 
-    private final Map<Byte, ActionInfo> actions;
-    private final List<Byte> actionIds;
-    private final Map<String, Byte> nameToId;
+    // Bidirectional mappings
+    private static final Map<Byte, String> BYTE_TO_FUNCTION = new ConcurrentHashMap<>();
+    private static final Map<String, Byte> FUNCTION_TO_BYTE = new ConcurrentHashMap<>();
 
-    public ActionRegistry() {
-        this.actions = new ConcurrentHashMap<>();
-        this.actionIds = new ArrayList<>();
-        this.nameToId = new ConcurrentHashMap<>();
+    // Special action IDs
+    public static final byte ACTION_UNKNOWN = 0;
 
-        // Register all available actions
-        registerDefaultActions();
+    static {
+        // Note: refreshFromToolRegistry() will be called explicitly after ToolRegistry is initialized
+        // Static initialization can run before ToolRegistry is ready
+        LOGGER.info("ActionRegistry static block initialized (deferred refresh)");
     }
 
     /**
-     * Register all default actions from FunctionCallerV2.
+     * Ensure ActionRegistry is initialized. Called by MarkovChain2 and Planner.
      */
-    private void registerDefaultActions() {
-        // Movement actions (low time cost)
-        register(1, "moveToCoordinates", "Move bot to specific coordinates",
-                new String[]{"x", "y", "z"}, 5.0, false, 5);
-        register(2, "moveToEntity", "Move bot towards an entity",
-                new String[]{"entityName"}, 3.0, false, 5);
-        register(3, "retreat", "Move away from danger",
-                new String[]{}, 2.0, false, 8);
-
-        // Combat actions
-        register(10, "attack", "Attack nearest hostile entity",
-                new String[]{}, 1.0, false, 7);
-        register(11, "shoot", "Shoot arrow at target",
-                new String[]{"target"}, 2.0, false, 7);
-        register(12, "evade", "Dodge incoming projectile",
-                new String[]{}, 1.5, false, 9);
-
-        // Block interaction
-        register(20, "mineBlock", "Mine a block at coordinates",
-                new String[]{"x", "y", "z"}, 3.0, false, 6);
-        register(21, "placeBlock", "Place a block",
-                new String[]{"blockType", "x", "y", "z"}, 1.0, false, 4);
-        register(22, "breakNearestBlock", "Break nearest matching block",
-                new String[]{"blockType"}, 2.0, false, 6);
-
-        // Item management
-        register(30, "craftItem", "Craft an item",
-                new String[]{"itemName", "count"}, 4.0, false, 5);
-        register(31, "smeltItem", "Smelt items in furnace",
-                new String[]{"inputItem", "count"}, 10.0, false, 4);
-        register(32, "equipItem", "Equip item from inventory",
-                new String[]{"itemName", "slot"}, 0.5, false, 6);
-        register(33, "dropItem", "Drop item from inventory",
-                new String[]{"itemName", "count"}, 0.5, false, 3);
-
-        // Survival actions
-        register(40, "eat", "Consume food to restore hunger",
-                new String[]{}, 1.0, false, 8);
-        register(41, "sleep", "Sleep in a bed",
-                new String[]{}, 5.0, false, 5);
-        register(42, "shield", "Block with shield",
-                new String[]{}, 0.5, false, 9);
-
-        // Information gathering
-        register(50, "scanArea", "Scan nearby area for entities/blocks",
-                new String[]{"radius"}, 0.5, false, 4);
-        register(51, "findPath", "Calculate path to destination",
-                new String[]{"x", "y", "z"}, 1.0, false, 5);
-
-        // Goal completion
-        register(60, "fetchItem", "Fetch specific item and bring to player",
-                new String[]{"itemName", "count"}, 8.0, true, 10);
-        register(61, "buildStructure", "Build a structure",
-                new String[]{"structureType", "x", "y", "z"}, 15.0, true, 6);
-        register(62, "gatherResources", "Gather specific resources",
-                new String[]{"resourceType", "count"}, 12.0, true, 7);
-
-        LOGGER.info("Registered {} actions in ActionRegistry", actions.size());
+    public static void ensureInitialized() {
+        if (FUNCTION_TO_BYTE.isEmpty()) {
+            LOGGER.info("ActionRegistry not yet initialized, refreshing now...");
+            refreshFromToolRegistry();
+        }
     }
 
     /**
-     * Register a new action.
+     * Refresh action mappings from ToolRegistry.
+     * Should be called when new tools are registered.
      */
-    public void register(int id, String name, String description,
-                        String[] paramNames, double estimatedTime,
-                        boolean isTerminal, int priority) {
-        byte byteId = (byte) id;
-        ActionInfo info = new ActionInfo(byteId, name, description,
-                                        paramNames, estimatedTime,
-                                        isTerminal, priority);
-        actions.put(byteId, info);
-        actionIds.add(byteId);
-        nameToId.put(name.toLowerCase(), byteId);
-    }
+    public static synchronized void refreshFromToolRegistry() {
+        LOGGER.info("Refreshing action registry from ToolRegistry...");
 
-    /**
-     * Get action info by ID.
-     */
-    public ActionInfo getActionInfo(byte actionId) {
-        return actions.get(actionId);
-    }
+        // Clear existing mappings (except for special actions)
+        BYTE_TO_FUNCTION.clear();
+        FUNCTION_TO_BYTE.clear();
+        byte nextByteId = 1;
 
-    /**
-     * Get action ID by name.
-     */
-    public Byte getActionId(String actionName) {
-        return nameToId.get(actionName.toLowerCase());
-    }
+        // Register unknown action
+        BYTE_TO_FUNCTION.put(ACTION_UNKNOWN, "unknown");
+        FUNCTION_TO_BYTE.put("unknown", ACTION_UNKNOWN);
 
-    /**
-     * Sample a random action (weighted by priority).
-     */
-    public byte sampleRandomAction(Random random) {
-        if (actionIds.isEmpty()) return 0;
+        // Register all functions from ToolRegistry
+        List<Tool> allFunctions = ToolRegistry.TOOLS;
 
-        // Weight by priority
-        int totalPriority = actions.values().stream()
-            .mapToInt(a -> a.priority)
-            .sum();
+        if (allFunctions == null || allFunctions.isEmpty()) {
+            LOGGER.error("⚠ ToolRegistry has no functions registered! Action registry will be empty.");
+            LOGGER.error("This is a critical error - planner cannot work without registered tools.");
+            return;
+        }
 
-        int r = random.nextInt(totalPriority);
-        int cumulative = 0;
+        LOGGER.info("Found {} tools in ToolRegistry", allFunctions.size());
 
-        for (byte id : actionIds) {
-            ActionInfo info = actions.get(id);
-            cumulative += info.priority;
-            if (r < cumulative) {
-                return id;
+        for (Tool func : allFunctions) {
+            String functionName = func.name();
+
+            if (functionName == null || functionName.isEmpty()) {
+                LOGGER.warn("Skipping tool with null/empty name");
+                continue;
+            }
+
+            if (!FUNCTION_TO_BYTE.containsKey(functionName)) {
+                if (nextByteId >= 127) {
+                    LOGGER.warn("Action registry full! Cannot register more than 127 actions.");
+                    break;
+                }
+
+                byte byteId = nextByteId++;
+                BYTE_TO_FUNCTION.put(byteId, functionName);
+                FUNCTION_TO_BYTE.put(functionName, byteId);
+
+                LOGGER.info("  Registered: {} → byte {}", functionName, byteId & 0xFF);
             }
         }
 
-        return actionIds.get(0); // Fallback
-    }
+        LOGGER.info("✓ Action registry initialized with {} functions", FUNCTION_TO_BYTE.size() - 1);
 
-    /**
-     * Get all action IDs.
-     */
-    public List<Byte> getAllActionIds() {
-        return new ArrayList<>(actionIds);
-    }
-
-    /**
-     * Get all actions.
-     */
-    public Collection<ActionInfo> getAllActions() {
-        return actions.values();
-    }
-
-    /**
-     * Get actions matching a goal keyword.
-     */
-    public List<ActionInfo> getActionsForGoal(String goalKeyword) {
-        List<ActionInfo> matching = new ArrayList<>();
-        String keyword = goalKeyword.toLowerCase();
-
-        for (ActionInfo info : actions.values()) {
-            if (info.name.toLowerCase().contains(keyword) ||
-                info.description.toLowerCase().contains(keyword)) {
-                matching.add(info);
+        // Always log registered actions for debugging
+        LOGGER.info("Registered actions:");
+        int count = 0;
+        for (Map.Entry<String, Byte> entry : FUNCTION_TO_BYTE.entrySet()) {
+            if (!entry.getKey().equals("unknown")) {
+                LOGGER.info("  {} → byte {}", entry.getKey(), entry.getValue() & 0xFF);
+                count++;
             }
         }
 
-        // Sort by priority
-        matching.sort((a, b) -> Integer.compare(b.priority, a.priority));
-        return matching;
+        if (count == 0) {
+            LOGGER.error("❌ NO ACTIONS REGISTERED! This will cause planning to fail.");
+        }
     }
 
     /**
-     * Get statistics.
+     * Get function name from byte ID.
      */
-    public Map<String, Object> getStats() {
-        Map<String, Object> stats = new HashMap<>();
-        stats.put("totalActions", actions.size());
-        stats.put("terminalActions", actions.values().stream()
-            .filter(a -> a.isTerminal)
-            .count());
-        return stats;
+    public static String getFunctionName(byte actionByte) {
+        return BYTE_TO_FUNCTION.getOrDefault(actionByte, "unknown");
+    }
+
+    /**
+     * Get byte ID from function name.
+     */
+    public static byte getActionByte(String functionName) {
+        return FUNCTION_TO_BYTE.getOrDefault(functionName, ACTION_UNKNOWN);
+    }
+
+    /**
+     * Get all registered action bytes.
+     */
+    public static Set<Byte> getAllActionBytes() {
+        return new HashSet<>(BYTE_TO_FUNCTION.keySet());
+    }
+
+    /**
+     * Get all registered function names.
+     */
+    public static Set<String> getAllFunctionNames() {
+        return new HashSet<>(FUNCTION_TO_BYTE.keySet());
+    }
+
+    /**
+     * Check if a byte ID is valid.
+     */
+    public static boolean isValidAction(byte actionByte) {
+        return BYTE_TO_FUNCTION.containsKey(actionByte);
+    }
+
+    /**
+     * Check if a function name is registered.
+     */
+    public static boolean isValidFunction(String functionName) {
+        return FUNCTION_TO_BYTE.containsKey(functionName);
+    }
+
+    /**
+     * Get all actions relevant to a specific goal.
+     * Simple keyword matching against function names and descriptions.
+     */
+    public static List<Byte> getRelevantActions(short goalId, String goalKeywords) {
+        List<Byte> relevant = new ArrayList<>();
+        String lowerKeywords = goalKeywords.toLowerCase();
+
+        // Split keywords into individual words for better matching
+        String[] keywords = lowerKeywords.split("\\s+");
+
+        // Add goal-specific keywords based on goal ID
+        Set<String> expandedKeywords = new HashSet<>(Arrays.asList(keywords));
+
+        // Expand keywords based on goal type
+        if (goalKeywords.contains("gather") || goalKeywords.contains("collect") ||
+            goalKeywords.contains("fetch") || goalKeywords.contains("get")) {
+            expandedKeywords.addAll(Arrays.asList("mine", "chop", "cut", "harvest", "break", "dig",
+                "detect", "navigate", "look", "inventory", "block"));
+        }
+        if (goalKeywords.contains("wood") || goalKeywords.contains("tree") || goalKeywords.contains("log")) {
+            expandedKeywords.addAll(Arrays.asList("mine", "block", "look", "navigate", "detect", "inventory"));
+        }
+        if (goalKeywords.contains("build") || goalKeywords.contains("place")) {
+            expandedKeywords.addAll(Arrays.asList("place", "block", "navigate", "look"));
+        }
+        if (goalKeywords.contains("craft")) {
+            expandedKeywords.addAll(Arrays.asList("craft", "make", "inventory"));
+        }
+
+        // Simple keyword matching against all tools
+        for (Tool tool : ToolRegistry.TOOLS) {
+            String toolName = tool.name().toLowerCase();
+            String toolDesc = tool.description().toLowerCase();
+
+            boolean matches = false;
+
+            // Check if any keyword matches tool name or description
+            for (String keyword : expandedKeywords) {
+                if (keyword.length() < 2) continue; // Skip single letters
+
+                // More flexible matching: check if keyword is part of tool name/description
+                // or if tool name is part of keyword
+                if (toolName.contains(keyword) ||
+                    toolDesc.contains(keyword) ||
+                    keyword.contains(toolName) ||
+                    // Also check without underscores
+                    toolName.replace("_", "").contains(keyword) ||
+                    keyword.contains(toolName.replace("_", ""))) {
+                    matches = true;
+                    break;
+                }
+            }
+
+            // Also check full keyword match
+            if (toolName.contains(lowerKeywords) || toolDesc.contains(lowerKeywords) ||
+                lowerKeywords.contains(toolName)) {
+                matches = true;
+            }
+
+            if (matches) {
+                byte actionByte = getActionByte(tool.name());
+                if (actionByte != ACTION_UNKNOWN) {
+                    relevant.add(actionByte);
+                    LOGGER.debug("Matched action '{}' for goal '{}'", tool.name(), goalKeywords);
+                }
+            }
+        }
+
+        // If no relevant actions found, use goal-specific default set (not ALL)
+        if (relevant.isEmpty()) {
+            // Use goal-specific defaults instead of all actions
+            String[] defaultActions = getDefaultActionsForGoal(goalId);
+
+            for (String actionName : defaultActions) {
+                byte actionByte = getActionByte(actionName);
+                if (actionByte != ACTION_UNKNOWN) {
+                    relevant.add(actionByte);
+                }
+            }
+
+            if (!relevant.isEmpty()) {
+                LOGGER.info("Using {} default actions for goal '{}' (ID: {})",
+                    relevant.size(), goalKeywords, goalId);
+            } else {
+                LOGGER.warn("No relevant or default actions found for goal '{}'", goalKeywords);
+            }
+        } else {
+            LOGGER.info("Found {} relevant actions for goal '{}'", relevant.size(), goalKeywords);
+        }
+
+        return relevant;
+    }
+
+    /**
+     * Get default actions for a specific goal ID.
+     */
+    private static String[] getDefaultActionsForGoal(short goalId) {
+        // Return goal-specific defaults instead of ALL actions
+        return switch (goalId) {
+            case 1 -> // MINE
+                new String[]{"mineBlock", "look", "detectBlocks", "getInventory"};
+            case 2 -> // BUILD
+                new String[]{"placeBlock", "look", "navigateTo", "getInventory"};
+            case 3 -> // CRAFT
+                new String[]{"craft", "getInventory", "detectBlocks"};
+            case 4 -> // NAVIGATE
+                new String[]{"navigateTo", "goTo", "look"};
+            case 5 -> // COMBAT
+                new String[]{"attack", "shoot", "defend", "getHealthLevel"};
+            case 6 -> // GATHER (most common)
+                new String[]{"mineBlock", "detectBlocks", "look", "navigateTo", "getInventory"};
+            case 7 -> // EXPLORE
+                new String[]{"navigateTo", "look", "detectBlocks", "webSearch"};
+            case 8 -> // FARM
+                new String[]{"placeBlock", "mineBlock", "look", "navigateTo"};
+            case 9 -> // TRADE
+                new String[]{"navigateTo", "look", "getInventory"};
+            default -> // Unknown goal - minimal set
+                new String[]{"look", "getInventory", "getHealthLevel"};
+        };
+    }
+
+    /**
+     * Get human-readable debug info for an action byte.
+     */
+    public static String getActionDebugInfo(byte actionByte) {
+        String funcName = getFunctionName(actionByte);
+        if (funcName.equals("unknown")) {
+            return String.format("unknown_%d", actionByte & 0xFF);
+        }
+
+        // Check if function exists in ToolRegistry
+        Tool func = ToolRegistry.TOOLS.stream()
+            .filter(t -> t.name().equals(funcName))
+            .findFirst()
+            .orElse(null);
+
+        if (func != null) {
+            return String.format("%s (byte %d)", funcName, actionByte & 0xFF);
+        }
+
+        return funcName;
     }
 }
 

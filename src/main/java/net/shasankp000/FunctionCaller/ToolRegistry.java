@@ -202,6 +202,30 @@ public class ToolRegistry {
                         sharedState.put("lastPlacedBlock.z", paramMap.get("targetZ"));
                         sharedState.put("lastPlacedBlock.type", paramMap.get("blockType"));
                     }
+            ),
+
+            new Tool(
+                    "searchBlocks",
+                    """
+                    Efficiently searches for blocks in an expanding radius around the bot.
+                    Uses incremental search shells to avoid lag. Caches searched positions to prevent re-scanning.
+                    Returns the nearest matching block's coordinates, which can be used with goTo and mineBlock.
+                    """,
+                    List.of(
+                            new Tool.Parameter("blockType", "Target block type (e.g., 'oak_log', 'minecraft:iron_ore')."),
+                            new Tool.Parameter("initialRadius", "Starting search radius in blocks (e.g., 10)."),
+                            new Tool.Parameter("maxRadius", "Maximum search radius in blocks (e.g., 100)."),
+                            new Tool.Parameter("radiusIncrement", "How much to expand each iteration (e.g., 20).")
+                    ),
+                    Set.of("foundBlock.x", "foundBlock.y", "foundBlock.z", "foundBlock.type"),
+                    (sharedState, paramMap, result) -> {
+                        if (result instanceof BlockPos pos) {
+                            sharedState.put("foundBlock.x", pos.getX());
+                            sharedState.put("foundBlock.y", pos.getY());
+                            sharedState.put("foundBlock.z", pos.getZ());
+                            sharedState.put("foundBlock.type", paramMap.get("blockType"));
+                        }
+                    }
             )
     );
 

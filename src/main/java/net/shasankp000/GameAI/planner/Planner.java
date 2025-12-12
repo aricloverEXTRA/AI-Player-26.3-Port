@@ -49,6 +49,25 @@ public class Planner {
 
         LOGGER.info("Building plan for goal: {}", goalSpec);
 
+        // Initialize shared state based on goal
+        markovChain.clearSharedState();
+        String goalName = GoalMapper.getGoalName(goalSpec);
+
+        // Set goal-specific context in shared state
+        if (goalName.equalsIgnoreCase("gather")) {
+            markovChain.updateSharedState("targetBlockType", "minecraft:oak_log");
+        } else if (goalName.equalsIgnoreCase("build")) {
+            markovChain.updateSharedState("targetBlockType", "minecraft:stone");
+        }
+
+        // Debug: Check ActionRegistry status
+        int registeredActions = ActionRegistry.getAllActionBytes().size();
+        if (registeredActions <= 1) {
+            LOGGER.error("❌ ActionRegistry has only {} actions registered! Cannot plan.", registeredActions);
+            return null;
+        }
+        LOGGER.debug("ActionRegistry has {} actions available", registeredActions);
+
         // Step 1: Generate initial drafts in parallel
         List<Future<ScoredPlan>> draftFutures = new ArrayList<>();
         for (int i = 0; i < INITIAL_DRAFTS; i++) {
@@ -76,8 +95,17 @@ public class Planner {
         // Sort by score (lower is better)
         drafts.sort(Comparator.comparingDouble(sp -> sp.score));
 
-        LOGGER.info("Generated {} drafts, best score: {:.2f}",
-                   drafts.size(), drafts.get(0).score);
+        ScoredPlan bestDraft = drafts.get(0);
+        LOGGER.info("Generated {} drafts, best score: %.2f", drafts.size(), bestDraft.score);
+
+        // Log best draft's actions for debugging
+        if (LOGGER.isDebugEnabled() && !bestDraft.steps.isEmpty()) {
+            LOGGER.debug("Best draft plan:");
+            for (int i = 0; i < Math.min(5, bestDraft.steps.size()); i++) {
+                PlannedStep step = bestDraft.steps.get(i);
+                LOGGER.debug("  {}: {} (byte: {})", i + 1, step.actionName, step.actionId & 0xFF);
+            }
+        }
 
         // Step 2: Beam search refinement
         List<ScoredPlan> beam = new ArrayList<>();
@@ -112,7 +140,7 @@ public class Planner {
             // Check for improvement
             if (beam.get(0).score < bestPlan.score) {
                 bestPlan = beam.get(0);
-                LOGGER.debug("Improved plan score: {:.2f}", bestPlan.score);
+                LOGGER.debug("Improved plan score: %.2f", bestPlan.score);
             }
 
             // Early stop if safe enough
@@ -123,16 +151,23 @@ public class Planner {
         }
 
         long duration = System.currentTimeMillis() - startTime;
-        LOGGER.info("Planning completed in {}ms, final score: {:.2f}",
-                   duration, bestPlan.score);
+        LOGGER.info("Planning completed in {}ms, final score: %.2f", duration, bestPlan.score);
 
         // Create final plan object
         if (bestPlan.score < 200.0) { // Reject plans that are too risky
             Plan plan = new Plan(UUID.randomUUID(), goalSpec, bestPlan.steps);
             plan.estimatedRisk = bestPlan.score;
+
+            // Log final plan
+            LOGGER.info("✓ Final plan with {} steps:", plan.length());
+            for (int i = 0; i < Math.min(10, plan.steps.size()); i++) {
+                PlannedStep step = plan.steps.get(i);
+                LOGGER.info("  Step {}: {}", i + 1, step.actionName);
+            }
+
             return plan;
         } else {
-            LOGGER.warn("Best plan score too high ({}), rejecting", bestPlan.score);
+            LOGGER.warn("Best plan score too high (%.2f), rejecting", bestPlan.score);
             return null;
         }
     }
@@ -249,17 +284,26 @@ public class Planner {
     private PlannedStep chooseSafetyAction(State state) {
         // Eat if hungry
         if (state.getBotHungerLevel() < 14) {
-            return new PlannedStep((byte) 22, "eat_food", 0.0, null);
+            byte eatAction = ActionRegistry.getActionByte("eat");
+            if (eatAction != ActionRegistry.ACTION_UNKNOWN) {
+                return new PlannedStep(eatAction, "eat", 0.0, null);
+            }
         }
 
         // Shield if enemies nearby
         if (state.getNearbyEntities().stream().anyMatch(e -> e.isHostile())) {
-            return new PlannedStep((byte) 12, "use_shield", 0.0, null);
+            byte shieldAction = ActionRegistry.getActionByte("shield");
+            if (shieldAction != ActionRegistry.ACTION_UNKNOWN) {
+                return new PlannedStep(shieldAction, "shield", 0.0, null);
+            }
         }
 
-        // Torch if dark
-        if (state.getTimeOfDay().equals("night")) {
-            return new PlannedStep((byte) 25, "use_torch", 0.0, null);
+        // Retreat if low health
+        if (state.getBotHealth() < 10) {
+            byte retreatAction = ActionRegistry.getActionByte("retreat");
+            if (retreatAction != ActionRegistry.ACTION_UNKNOWN) {
+                return new PlannedStep(retreatAction, "retreat", 0.0, null);
+            }
         }
 
         return null;
