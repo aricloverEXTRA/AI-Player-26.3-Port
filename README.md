@@ -1,3 +1,9 @@
+# Official website
+
+https://shasankp000.github.io/AI-Player-Website/
+
+---
+
 ## Stargazers over time
 [![Stargazers over time](https://starchart.cc/shasankp000/AI-Player.svg?variant=adaptive)](https://starchart.cc/shasankp000/AI-Player)
 
@@ -19,11 +25,9 @@ Just know that I won't ever give up on this project.
 ---
 # Also, THIS!
 
-If anyone is interested on the underlying algorithms I am working on for increased **intelligence** for the minecraft bot, feel free to check out this repository: 
+NLP pipeline training in-depth information : https://github.com/shasankp000/NLP_2.0_pipeline
 
-https://github.com/shasankp000/AI-Tricks
-
-I am open to suggestions/improvements, if any. (Obviously there will be improvements from my own end).
+Website repo: https://github.com/shasankp000/AI-Player-Website
 
 ---
 
