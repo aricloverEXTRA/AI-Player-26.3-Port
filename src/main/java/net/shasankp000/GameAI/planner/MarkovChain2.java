@@ -89,10 +89,14 @@ public class MarkovChain2 {
         if (goalName.equalsIgnoreCase("gather")) {
             // For gather goals, set target block type
             sharedState.put("targetBlockType", "minecraft:oak_log");
+
+            // Clear any previous block locations
+            sharedState.remove("foundBlock.x");
+            sharedState.remove("foundBlock.y");
+            sharedState.remove("foundBlock.z");
         }
 
         // Get relevant actions for this goal
-        String goalName = GoalMapper.getGoalName(goalId);
         List<Byte> relevantActions = ActionRegistry.getRelevantActions(goalId, goalName);
 
         if (relevantActions.isEmpty()) {
@@ -117,14 +121,14 @@ public class MarkovChain2 {
 
         LOGGER.debug("Planning for goal '{}' with {} relevant actions", goalName, relevantActions.size());
 
-        // For gathering goals, ensure detectBlocks comes before mineBlock
+        // For gathering goals, ALWAYS start with searchBlocks to find the target
         if (goalId == 6) { // GATHER goal
-            byte detectBlocksAction = ActionRegistry.getActionByte("detectBlocks");
-            if (detectBlocksAction != ActionRegistry.ACTION_UNKNOWN && relevantActions.contains(detectBlocksAction)) {
-                // Start with detectBlocks for gathering
-                String params = generateDefaultParams("detectBlocks", context);
-                plan.add(new PlannedStep(detectBlocksAction, "detectBlocks", 0.0, params));
-                LOGGER.debug("Added detectBlocks as first step for gather goal");
+            byte searchBlocksAction = ActionRegistry.getActionByte("searchBlocks");
+            if (searchBlocksAction != ActionRegistry.ACTION_UNKNOWN && relevantActions.contains(searchBlocksAction)) {
+                // Start with searchBlocks for gathering
+                String params = generateDefaultParams("searchBlocks", context);
+                plan.add(new PlannedStep(searchBlocksAction, "searchBlocks", 0.0, params));
+                LOGGER.debug("Added searchBlocks as first step for gather goal");
             }
         }
 
@@ -160,15 +164,18 @@ public class MarkovChain2 {
                 continue; // Skip and try next
             }
 
-            // Enforce dependencies: can't mine without detecting first (for gather goals)
-            if (goalId == 6 && actionName.equalsIgnoreCase("mineBlock")) {
-                // Check if we've already detected blocks
-                boolean hasDetected = plan.stream()
-                    .anyMatch(step -> step.actionName.equalsIgnoreCase("detectBlocks"));
+            // Enforce dependencies: can't mine/goto without searching first (for gather goals)
+            if (goalId == 6) {
+                if (actionName.equalsIgnoreCase("mineBlock") || actionName.equalsIgnoreCase("goTo")) {
+                    // Check if we've already searched for blocks
+                    boolean hasSearched = plan.stream()
+                        .anyMatch(step -> step.actionName.equalsIgnoreCase("searchBlocks"));
 
-                if (!hasDetected) {
-                    // Skip mineBlock for now, it will be added after detectBlocks
-                    continue;
+                    if (!hasSearched) {
+                        // Skip actions that depend on search results
+                        LOGGER.debug("Skipping {} - no searchBlocks executed yet", actionName);
+                        continue;
+                    }
                 }
             }
 
