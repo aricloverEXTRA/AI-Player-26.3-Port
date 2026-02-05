@@ -13,6 +13,7 @@ public class Plan {
     public final List<PlannedStep> steps;
 
     public double estimatedRisk;
+    public double score; // Overall score for plan comparison (used by hybrid planner)
     public long createdAt;
 
     public Plan(UUID planId, short goalId, List<PlannedStep> steps) {
@@ -20,6 +21,7 @@ public class Plan {
         this.goalId = goalId;
         this.steps = new ArrayList<>(steps);
         this.estimatedRisk = 0.0;
+        this.score = 0.0;
         this.createdAt = System.currentTimeMillis();
     }
 

@@ -115,6 +115,10 @@ public class FunctionCallerV2 {
     private static MarkovChain2 markovChain = null;
     private static final double SAFE_THRESHOLD = 50.0;
 
+    // Hybrid Planner components (advanced goal-oriented planning)
+    private static HybridPlanner hybridPlanner = null;
+    private static boolean useHybridPlanner = true; // Toggle between planners
+
     public FunctionCallerV2(ServerCommandSource botSource, UUID playerUUID) {
         FunctionCallerV2.botSource = botSource;
         ollamaAPI.setRequestTimeoutSeconds(90);
@@ -136,6 +140,29 @@ public class FunctionCallerV2 {
             planner = new Planner(markovChain, rlAgent);
             actionLogWriter = new ActionLogWriter(markovChain, bot);
             logger.info("[planner] ✓ Planner system initialized");
+        }
+
+        // Initialize hybrid planner if enabled
+        if (useHybridPlanner && hybridPlanner == null) {
+            try {
+                logger.info("[hybrid-planner] Initializing hybrid goal-oriented planner...");
+
+                // Initialize goal vector system (uses simple TF-IDF-like approach)
+                GoalVector goalVector = new GoalVector();
+
+                // Build action graph from ActionRegistry
+                ActionGraph actionGraph = new ActionGraph(goalVector);
+                actionGraph.buildFromRegistry();
+
+                // Initialize hybrid planner
+                SequenceRiskAnalyzer riskAnalyzer = new SequenceRiskAnalyzer(rlAgent);
+                hybridPlanner = new HybridPlanner(actionGraph, goalVector, markovChain, rlAgent, riskAnalyzer);
+
+                logger.info("[hybrid-planner] ✓ Hybrid planner system initialized");
+            } catch (Exception e) {
+                logger.error("[hybrid-planner] Failed to initialize hybrid planner, falling back to Markov", e);
+                useHybridPlanner = false;
+            }
         }
     }
 
@@ -176,8 +203,28 @@ public class FunctionCallerV2 {
         String goalName = GoalMapper.getGoalName(goalId);
         logger.info("[planner] Parsed goal '{}' → ID {} ({})", naturalLanguageGoal, goalId, goalName);
 
-        // Try Markov planner first
-        Plan plan = planner.buildPlan(currentState, goalId);
+        Plan plan = null;
+
+        // Try hybrid planner first if enabled
+        if (useHybridPlanner && hybridPlanner != null) {
+            try {
+                logger.info("[hybrid-planner] Attempting hybrid planning for goal '{}'", goalName);
+                plan = hybridPlanner.buildPlan(currentState, naturalLanguageGoal, goalId);
+
+                if (plan != null) {
+                    logger.info("[hybrid-planner] ✓ Using hybrid planner (score: {})", plan.getTotalScore());
+                    return executePlan(plan, actionLogWriter, currentState);
+                }
+            } catch (Exception e) {
+                logger.error("[hybrid-planner] Hybrid planning failed, falling back to Markov", e);
+            }
+        }
+
+        // Fall back to Markov planner
+        if (plan == null) {
+            logger.info("[planner] Attempting Markov planning for goal '{}'", goalName);
+            plan = planner.buildPlan(currentState, goalId);
+        }
 
         if (plan != null && plan.getTotalScore() < SAFE_THRESHOLD * 4) {
             logger.info("[planner] ✓ Using Markov planner for goal '{}' (score: {})",
@@ -185,9 +232,9 @@ public class FunctionCallerV2 {
             return executePlan(plan, actionLogWriter, currentState);
         } else {
             if (plan == null) {
-                logger.warn("[planner] Markov planner returned null for goal '{}', falling back to LLM", goalName);
+                logger.warn("[planner] All planners returned null for goal '{}', falling back to LLM", goalName);
             } else {
-                logger.warn("[planner] Markov planner score too high ({}) for goal '{}', falling back to LLM",
+                logger.warn("[planner] Planner score too high ({}) for goal '{}', falling back to LLM",
                         plan.getTotalScore(), goalName);
             }
             return fallbackToLLM(naturalLanguageGoal, currentState);
@@ -196,13 +243,104 @@ public class FunctionCallerV2 {
 
     /**
      * Fallback to LLM-based planning when Markov planner fails.
-     * TODO: Implement LLM-based pipeline generation
+     * Generates pipeline using language model and executes it.
      */
     private static CompletableFuture<Boolean> fallbackToLLM(String goal, State currentState) {
-        logger.info("[planner] LLM fallback for goal: '{}'", goal);
-        // TODO: Integrate with existing LLM-based function calling system
-        // For now, return failure
-        return CompletableFuture.completedFuture(false);
+        logger.info("[planner] 🤖 LLM fallback for goal: '{}'", goal);
+
+        return CompletableFuture.supplyAsync(() -> {
+            try {
+                // Build context for LLM
+                InternalMap map = new InternalMap(botSource.getPlayer(), 1, 1);
+                map.updateMap();
+                Map<String, String> surroundingsStr = map.summarizeSurroundings();
+                Map<String, Object> surroundings = new HashMap<>();
+                surroundings.putAll(surroundingsStr);
+
+                String botContext = buildLLMBotContext(currentState, sharedState, surroundings);
+                String systemPrompt = buildPrompt(toolBuilder());
+                String fullSystemPrompt = systemPrompt + "\n\nBot's context information:\n" + botContext;
+
+                // Construct user prompt
+                String userPrompt = "Goal: " + goal + "\n\n" +
+                    "The automated planning systems (Hybrid and Markov) were unable to generate a safe plan for this goal. " +
+                    "Please analyze the situation and generate an appropriate action pipeline. " +
+                    "Consider the bot's current state and surroundings carefully.";
+
+                String response;
+
+                // Use Ollama for LLM fallback
+                List<OllamaChatMessage> messages = new ArrayList<>();
+                messages.add(new OllamaChatMessage(OllamaChatMessageRole.SYSTEM, fullSystemPrompt));
+                messages.add(new OllamaChatMessage(OllamaChatMessageRole.USER, userPrompt));
+
+                net.shasankp000.OllamaClient.OllamaThinkingResponse thinkingResponse =
+                        net.shasankp000.OllamaClient.OllamaAPIHelper.smartChat(
+                                ollamaAPI,
+                                "http://localhost:11434",
+                                net.shasankp000.AIPlayer.CONFIG.getSelectedLanguageModel(),
+                                messages
+                        );
+                response = thinkingResponse.getContent();
+
+                logger.info("[planner] Raw LLM response: {}", response);
+
+                // Parse and execute LLM response
+                String cleanedResponse = stripThinkBlock(response);
+                String jsonPart = extractJson(cleanedResponse);
+                logger.info("[planner] Extracted JSON: {}", jsonPart);
+
+                JsonObject jsonObject = JsonParser.parseString(jsonPart).getAsJsonObject();
+
+                if (jsonObject.has("pipeline")) {
+                    JsonArray pipeline = jsonObject.getAsJsonArray("pipeline");
+                    logger.info("[planner] ✓ LLM generated pipeline with {} steps", pipeline.size());
+
+                    // Execute pipeline using existing runPipelineLoop
+                    runPipelineLoop(pipeline);
+                    return true;
+
+                } else if (jsonObject.has("functionName")) {
+                    // Single function call
+                    String fnName = jsonObject.get("functionName").getAsString();
+                    JsonArray paramsArray = jsonObject.getAsJsonArray("parameters");
+                    Map<String, String> paramMap = new HashMap<>();
+
+                    for (JsonElement parameter : paramsArray) {
+                        JsonObject paramObj = parameter.getAsJsonObject();
+                        String paramName = paramObj.get("parameterName").getAsString();
+                        String paramValue = resolvePlaceholder(
+                            paramObj.get("parameterValue").getAsString(),
+                            sharedState
+                        );
+                        paramMap.put(paramName, paramValue);
+                    }
+
+                    logger.info("[planner] ✓ LLM generated single function: {} with {}", fnName, paramMap);
+                    callFunction(fnName, paramMap, sharedState).join();
+                    return true;
+
+                } else if (jsonObject.has("clarification")) {
+                    String clarification = jsonObject.get("clarification").getAsString();
+                    logger.warn("[planner] ⚠ LLM requested clarification: {}", clarification);
+                    ChatContextManager.setPendingClarification(
+                        playerUUID,
+                        goal,
+                        clarification,
+                        botSource.getName()
+                    );
+                    sendMessageToPlayer(clarification);
+                    return false;
+                } else {
+                    logger.error("[planner] ❌ Invalid LLM response format");
+                    return false;
+                }
+
+            } catch (Exception e) {
+                logger.error("[planner] ❌ LLM fallback error: {}", e.getMessage(), e);
+                return false;
+            }
+        });
     }
 
     private static class ExecutionRecord {
@@ -500,11 +638,11 @@ public class FunctionCallerV2 {
             
             Key Principles
             
-            1. **Use only the tools you have.** 
+            1. **Use only the tools you have.**
             Do not hallucinate new tools. Each tool has clear parameters, a purpose, and trade-offs.
             
-            2. **Use the fewest tools possible.** 
-            When a single tool is enough, use it. 
+            2. **Use the fewest tools possible.**
+            When a single tool is enough, use it.
             When multiple tools must be chained, output them as a pipeline in the correct order.
             
             3. **Focus on action verbs.** 
@@ -830,9 +968,7 @@ public class FunctionCallerV2 {
         // If method returns Map<String, String>
         Map<String, String> surroundingsStr = map.summarizeSurroundings();
         Map<String, Object> surroundings = new HashMap<>();
-        for (Map.Entry<String, String> entry : surroundingsStr.entrySet()) {
-            surroundings.put(entry.getKey(), entry.getValue());
-        }
+        surroundings.putAll(surroundingsStr);
 
         String botContext = buildLLMBotContext(initialState, sharedState, surroundings);
         String fullSystemPrompt = systemPrompt + "\n\nBot's context information:\n" + botContext;
@@ -844,7 +980,7 @@ public class FunctionCallerV2 {
             logger.info("Extracted JSON: {}", jsonPart);
             executeFunction(userPrompt, jsonPart, client);
         } catch (Exception e) {
-            logger.error("Error in Function Caller: {}", e);
+            logger.error("Error in Function Caller: {}", e.getMessage(), e);
         }
     }
 
@@ -1055,9 +1191,7 @@ public class FunctionCallerV2 {
                     // If method returns Map<String, String>
                     Map<String, String> surroundingsStr = map.summarizeSurroundings();
                     Map<String, Object> surroundings = new HashMap<>();
-                    for (Map.Entry<String, String> entry : surroundingsStr.entrySet()) {
-                        surroundings.put(entry.getKey(), entry.getValue());
-                    }
+                    surroundings.putAll(surroundingsStr);
 
                     String botContext = buildLLMBotContext(initialState, sharedState, surroundings);
                     String fullSystemPrompt = systemPrompt + "\n\nBot's context information:\n" + botContext;
@@ -1103,7 +1237,7 @@ public class FunctionCallerV2 {
                         break;
                     }
                 } catch (Exception e) {
-                    logger.error("❌ Error in LLM fallback after unresolved parameters: {}", e);
+                    logger.error("❌ Error in LLM fallback after unresolved parameters: {}", e.getMessage(), e);
                     retryCount++;
                     continue;
                 }
@@ -1155,9 +1289,7 @@ public class FunctionCallerV2 {
                     // If method returns Map<String, String>
                     Map<String, String> surroundingsStr = map.summarizeSurroundings();
                     Map<String, Object> surroundings = new HashMap<>();
-                    for (Map.Entry<String, String> entry : surroundingsStr.entrySet()) {
-                        surroundings.put(entry.getKey(), entry.getValue());
-                    }
+                    surroundings.putAll(surroundingsStr);
 
                     String botContext = buildLLMBotContext(initialState, sharedState, surroundings);
                     String fullSystemPrompt = systemPrompt + "\n\nBot's context information:\n" + botContext;
@@ -1194,9 +1326,8 @@ public class FunctionCallerV2 {
                         break;
                     }
                 } catch (Exception e) {
-                    logger.error("❌ Error in LLM fallback after verifier failure: {}", e);
+                    logger.error("❌ Error in LLM fallback after verifier failure: {}", e.getMessage(), e);
                     retryCount++;
-                    continue;
                 }
             }
         }
@@ -1251,9 +1382,7 @@ public class FunctionCallerV2 {
                     // If method returns Map<String, String>
                     Map<String, String> surroundingsStr = map.summarizeSurroundings();
                     Map<String, Object> surroundings = new HashMap<>();
-                    for (Map.Entry<String, String> entry : surroundingsStr.entrySet()) {
-                        surroundings.put(entry.getKey(), entry.getValue());
-                    }
+                    surroundings.putAll(surroundingsStr);
 
                     String botContext = buildLLMBotContext(initialState, sharedState, surroundings);
                     String fullSystemPrompt = systemPrompt + "\n\nBot's context information:\n" + botContext;
@@ -1338,9 +1467,7 @@ public class FunctionCallerV2 {
                     // If method returns Map<String, String>
                     Map<String, String> surroundingsStr = map.summarizeSurroundings();
                     Map<String, Object> surroundings = new HashMap<>();
-                    for (Map.Entry<String, String> entry : surroundingsStr.entrySet()) {
-                        surroundings.put(entry.getKey(), entry.getValue());
-                    }
+                    surroundings.putAll(surroundingsStr);
 
                     String botContext = buildLLMBotContext(initialState, sharedState, surroundings);
                     String fullSystemPrompt = systemPrompt + "\n\nBot's context information:\n" + botContext;
@@ -1372,9 +1499,8 @@ public class FunctionCallerV2 {
                         break;
                     }
                 } catch (Exception e) {
-                    logger.error("❌ Error in LLM fallback after verifier failure: {}", e);
+                    logger.error("❌ Error in LLM fallback after verifier failure: {}", e.getMessage(), e);
                     retryCount++;
-                    continue;
                 }
             }
         }
@@ -1759,7 +1885,7 @@ public class FunctionCallerV2 {
                     })
                     .thenApply(_void2 -> {
                         // Verify the step actually achieved its goal
-                        boolean verified = verifyStepOutcome(step, sharedState, stateBefore);
+                        boolean verified = verifyStepOutcome(step, sharedState);
 
                         // Log execution
                         if (logWriter != null) {
@@ -1812,7 +1938,7 @@ public class FunctionCallerV2 {
                             throw new RuntimeException("Critical action failed: " + step.actionName);
                         }
 
-                        return (Void) null;
+                        return null;
                     });
             });
         }
@@ -1965,7 +2091,7 @@ public class FunctionCallerV2 {
     /**
      * Verify that a step achieved its expected outcome based on SharedState changes.
      */
-    private static boolean verifyStepOutcome(PlannedStep step, Map<String, Object> sharedState, State botStateBefore) {
+    private static boolean verifyStepOutcome(PlannedStep step, Map<String, Object> sharedState) {
         String actionName = step.actionName.toLowerCase();
 
         switch (actionName) {
@@ -2178,13 +2304,9 @@ public class FunctionCallerV2 {
     private static boolean isCriticalAction(String actionName) {
         if (actionName == null) return false;
 
-        switch (actionName.toLowerCase()) {
-            case "searchblocks":  // Can't mine without finding blocks first
-            case "goto":          // Can't reach target if navigation fails
-            case "navigateto":    // Same as goto
-                return true;
-            default:
-                return false;
-        }
+        return switch (actionName.toLowerCase()) {
+            case "searchblocks", "goto", "navigateto" -> true;
+            default -> false;
+        };
     }
 }
