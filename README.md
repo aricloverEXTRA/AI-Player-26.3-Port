@@ -21,8 +21,11 @@ Just know that I won't ever give up on this project.
 I also have started accepting payments and donations in cryptocurrencies.
 
 Ethereum: 0x47014CC9F8054593027c53996ddfDFa4ca8a5271
+
 Bitcoin: bc1qae6u7rqv0pmppxmr2uqfftrj4p6c7hmm3m39r5
+
 Solana: 3U3bXZJ2NrMV9FmkaotvPaNwWthg68sRqvstJwanyhcU
+
 Polygon Network (USDC or any other polygon based coins): 0x47014CC9F8054593027c53996ddfDFa4ca8a5271
 
 Any amount would help :)
