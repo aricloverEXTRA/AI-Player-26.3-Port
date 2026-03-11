@@ -161,7 +161,7 @@ public class ConfigManager extends Screen {
         int centerX = this.width / 2;
 
         // Title - centered
-        String title = "AI-Player Mod Configuration Menu v1.0.5.2-release+1.21.1";
+        String title = "AI-Player Mod Configuration Menu v1.0.5.4-release+1.21.4";
         int titleWidth = this.textRenderer.getWidth(title);
         context.drawText(this.textRenderer, title, centerX - titleWidth / 2, 20, titleColor, true);
 
