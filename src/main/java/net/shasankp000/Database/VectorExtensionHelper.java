@@ -157,7 +157,11 @@ public class VectorExtensionHelper {
             LOGGER.warn("⚠️ Failed to clean up unwanted files: {}", e.getMessage());
         }
 
-        if (Files.exists(outputPath)) {
+        // Also determine vector0 filename (dependency of vss0)
+        String vector0FileName = osName.contains("nux") || osName.contains("nix") ? "vector0.so" : "vector0.dylib";
+        Path vector0OutputPath = vssDir.resolve(vector0FileName);
+
+        if (Files.exists(outputPath) && Files.exists(vector0OutputPath)) {
             LOGGER.info("✅ sqlite-vss already present at: {}", outputPath);
             return outputPath;
         }
@@ -175,18 +179,64 @@ public class VectorExtensionHelper {
             gzipIn.transferTo(out);
         }
 
+        // Extract vss0 (main extension)
         try (InputStream tarIn = Files.newInputStream(tarPath)) {
             boolean found = safeExtractTar(tarIn, targetFileName, outputPath);
             if (!found) throw new IOException("❌ sqlite-vss extraction failed!");
+        }
+
+        // Extract vector0 (required dependency of vss0)
+        try (InputStream tarIn = Files.newInputStream(tarPath)) {
+            boolean found = safeExtractTar(tarIn, vector0FileName, vector0OutputPath);
+            if (!found) LOGGER.warn("⚠️ vector0 not found in archive — vss0 may fail to load");
+            else LOGGER.info("✅ vector0 extracted to: {}", vector0OutputPath);
         }
 
         LOGGER.info("✅ sqlite-vss ready at: {}", outputPath);
         return outputPath;
     }
 
+    public static void loadSqliteVector0Extension(Connection conn, Path vssDir) throws SQLException {
+        String osName = System.getProperty("os.name").toLowerCase(Locale.ENGLISH);
+        String vector0FileName = osName.contains("nux") || osName.contains("nix") ? "vector0.so" : "vector0.dylib";
+        Path vector0Path = vssDir.resolve(vector0FileName);
+
+        if (!Files.exists(vector0Path)) {
+            LOGGER.warn("⚠️ vector0 not found at {}, skipping", vector0Path);
+            return;
+        }
+
+        String path = vector0Path.toAbsolutePath().toString().replaceAll("\\.(dll|so|dylib)$", "");
+        path = path.replace("\\", "\\\\");
+
+        try (Statement stmt = conn.createStatement()) {
+            stmt.execute("SELECT load_extension('" + path + "', 'sqlite3_vector_init');");
+            LOGGER.info("✅ Loaded vector0 extension");
+        }
+    }
+
     /**
      * Shared TAR extractor - extracts only the specified file from a TAR archive.
      */
+    private static long parseTarSize(byte[] header, int offset) {
+        // Base-256 encoding: first byte is 0x80 or 0xFF
+        if ((header[offset] & 0x80) != 0) {
+            long val = 0;
+            for (int i = 1; i < 12; i++) {
+                val = (val << 8) | (header[offset + i] & 0xFF);
+            }
+            return val;
+        }
+        // Standard octal: strip nulls and spaces, then parse
+        StringBuilder sb = new StringBuilder();
+        for (int i = offset; i < offset + 12; i++) {
+            char c = (char) (header[i] & 0xFF);
+            if (c >= '0' && c <= '7') sb.append(c);
+        }
+        if (sb.length() == 0) return 0;
+        return Long.parseLong(sb.toString(), 8);
+    }
+
     private static boolean safeExtractTar(InputStream tarInputStream, String targetFileName, Path outputPath) throws IOException {
         byte[] header = new byte[512];
         boolean found = false;
@@ -198,7 +248,7 @@ public class VectorExtensionHelper {
             String name = new String(header, 0, 100).trim();
             if (name.isEmpty()) break;
 
-            long size = Long.parseLong(new String(header, 124, 12).trim(), 8);
+            long size = parseTarSize(header, 124);
 
             LOGGER.info("🔍 TAR entry: {} ({} bytes)", name, size);
 
