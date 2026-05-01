@@ -89,7 +89,7 @@ dependencies {
 shadowJar {
 	dependencies {
 		include(dependency('com.fasterxml.jackson.core:jackson-databind'))
-		include(dependency("io.wispforest:owo-sentinel:0.12.6+1.20.3"))
+		include(dependency("io.wispforest:owo-sentinel:0.12.15.4+1.21"))
 		include(dependency("com.github.amithkoujalgi:ollama4j:1.0.77"))
 	}
 	relocate 'com.fasterxml.jackson', 'net.shasankp000.relocated.com.fasterxml.jackson'
