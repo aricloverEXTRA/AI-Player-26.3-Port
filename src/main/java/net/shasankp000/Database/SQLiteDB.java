@@ -38,6 +38,9 @@ public class SQLiteDB {
             if (!osName.contains("win")) {
                 logger.info("✅ Detected Linux/MacOS — using sqlite-vss native extension");
                 Path extPath2 = VectorExtensionHelper.ensureSqliteVssPresent();
+                // vector0 must be loaded before vss0
+                Path vssDir = FabricLoader.getInstance().getConfigDir().resolve("sqlite_vector/sqlite-vss");
+                VectorExtensionHelper.loadSqliteVector0Extension(conn, vssDir);
                 VectorExtensionHelper.loadSqliteVssExtension(conn, extPath2);
             } else {
                 logger.info("✅ Detected Windows — using fallback cosine_distance UDF");
