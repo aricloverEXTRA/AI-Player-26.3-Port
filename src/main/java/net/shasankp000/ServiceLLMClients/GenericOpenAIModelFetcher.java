@@ -55,9 +55,14 @@ public class GenericOpenAIModelFetcher implements ModelFetcher {
                 LOGGER.info("Request url: {}", request.uri());
                 LOGGER.info("Response code: {}", response.statusCode());
 
+                JsonElement jsonElement = JsonParser.parseString(response.body());
+                JsonArray models;
 
-                JsonObject jsonResponse = JsonParser.parseString(response.body()).getAsJsonObject();
-                JsonArray models = jsonResponse.getAsJsonArray("data");
+                if (jsonElement.isJsonArray()) {
+                    models = jsonElement.getAsJsonArray();
+                } else {
+                    models = jsonElement.getAsJsonObject().getAsJsonArray("data");
+                }
 
                 for (JsonElement modelElement : models) {
                     JsonObject modelObject = modelElement.getAsJsonObject();
