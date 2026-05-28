@@ -17,98 +17,186 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * Maps natural language goals to numeric goal IDs for the Markov planner.
- * Uses fast LLM parsing with timeout fallback to keyword matching.
+ * Maps natural language goals to numeric goal IDs.
+ *
+ * Pipeline (in order of speed):
+ *  1. Weighted token scorer  — pure Java, < 1 ms, handles synonyms via SynonymMap.
+ *  2. Edge LLM fallback      — async, only triggered on GOAL_UNKNOWN.
+ *     Recommended edge models (fast on CPU/integrated GPU, runs via Ollama):
+ *       - qwen2.5:0.5b   (~300 MB, ~50–120 tok/s on CPU)
+ *       - qwen2.5:1.5b   (~900 MB, ~30–80  tok/s on CPU)
+ *       - smollm2:135m   (~90  MB, ~150+   tok/s on CPU)  ← fastest option
+ *       - smollm2:360m   (~220 MB, ~100+   tok/s on CPU)
+ *       - tinyllama:1.1b (~640 MB, ~20–50  tok/s on CPU)
+ *       - gemma3:1b      (~815 MB, ~30–60  tok/s on CPU)
+ *     For this single-token classification task any of these will respond in
+ *     well under 1 second even on a low-end machine.
+ *     To use: pull the model with `ollama pull <name>` and set
+ *     aiplayer.edgeFallbackModel=<name>  (system property or config).
+ *     Falls back silently to GOAL_UNKNOWN if Ollama is unavailable.
  */
 public class GoalMapper {
     private static final Logger LOGGER = LoggerFactory.getLogger("GoalMapper");
     private static final Map<Short, String> GOAL_ID_TO_NAME = new HashMap<>();
     private static final Map<String, Short> GOAL_KEYWORD_TO_ID = new HashMap<>();
 
-    // Fast LLM timeout (milliseconds)
-    private static final long LLM_TIMEOUT_MS = 5000; // 5 seconds max
-    private static final ExecutorService EXECUTOR = Executors.newCachedThreadPool();
+    // ── Edge-LLM fallback settings ────────────────────────────────────────────
+    /**
+     * System property that selects the edge model used for GOAL_UNKNOWN fallback.
+     * Recommended value: "smollm2:135m" or "qwen2.5:0.5b".
+     * Can also be set via the mod config under selectedLanguageModel when running
+     * a tiny model specifically for classification.
+     */
+    private static final String EDGE_MODEL_PROP   = "aiplayer.edgeFallbackModel";
+    private static final String EDGE_MODEL_DEFAULT = "smollm2:135m";
 
-    // Goal IDs (0-255 for now, expand later if needed)
-    public static final short GOAL_MINE = 1;
-    public static final short GOAL_BUILD = 2;
-    public static final short GOAL_CRAFT = 3;
+    /** Hard timeout for the edge-model call.  Should comfortably finish in < 2 s. */
+    private static final long   EDGE_LLM_TIMEOUT_MS = 3_000;
+
+    private static final ExecutorService EXECUTOR =
+        Executors.newSingleThreadExecutor(r -> {
+            Thread t = new Thread(r, "GoalMapper-EdgeLLM");
+            t.setDaemon(true);
+            return t;
+        });
+
+    // ── Goal IDs ──────────────────────────────────────────────────────────────
+    public static final short GOAL_MINE    = 1;
+    public static final short GOAL_BUILD   = 2;
+    public static final short GOAL_CRAFT   = 3;
     public static final short GOAL_NAVIGATE = 4;
-    public static final short GOAL_COMBAT = 5;
-    public static final short GOAL_GATHER = 6;
+    public static final short GOAL_COMBAT  = 5;
+    public static final short GOAL_GATHER  = 6;
     public static final short GOAL_EXPLORE = 7;
-    public static final short GOAL_FARM = 8;
-    public static final short GOAL_TRADE = 9;
+    public static final short GOAL_FARM    = 8;
+    public static final short GOAL_TRADE   = 9;
     public static final short GOAL_UNKNOWN = 0;
 
     static {
-        // Register goal mappings
-        registerGoal(GOAL_MINE, "mine", "mining", "dig", "excavate", "extract");
-        registerGoal(GOAL_BUILD, "build", "place", "construct", "create structure");
-        registerGoal(GOAL_CRAFT, "craft", "make", "create", "assemble");
-        registerGoal(GOAL_NAVIGATE, "go", "navigate", "move", "travel", "walk");
-        registerGoal(GOAL_COMBAT, "fight", "attack", "combat", "kill", "defend");
-        registerGoal(GOAL_GATHER, "gather", "collect", "fetch", "get", "obtain");
-        registerGoal(GOAL_EXPLORE, "explore", "search", "find", "look for");
-        registerGoal(GOAL_FARM, "farm", "harvest", "plant", "grow");
-        registerGoal(GOAL_TRADE, "trade", "buy", "sell", "exchange");
+        registerGoal(GOAL_MINE,    "mine",     "mine", "mining", "dig", "excavate", "extract");
+        registerGoal(GOAL_BUILD,   "build",    "build", "place", "construct", "create structure");
+        registerGoal(GOAL_CRAFT,   "craft",    "craft", "make", "create", "assemble");
+        registerGoal(GOAL_NAVIGATE,"navigate", "go", "navigate", "move", "travel", "walk");
+        registerGoal(GOAL_COMBAT,  "combat",   "fight", "attack", "combat", "kill", "defend");
+        registerGoal(GOAL_GATHER,  "gather",   "gather", "collect", "fetch", "get", "obtain");
+        registerGoal(GOAL_EXPLORE, "explore",  "explore", "search", "find", "look for");
+        registerGoal(GOAL_FARM,    "farm",     "farm", "harvest", "plant", "grow");
+        registerGoal(GOAL_TRADE,   "trade",    "trade", "buy", "sell", "exchange");
     }
 
-    /**
-     * Register a goal with multiple keyword triggers.
-     */
     private static void registerGoal(short goalId, String name, String... keywords) {
         GOAL_ID_TO_NAME.put(goalId, name);
-        for (String keyword : keywords) {
-            GOAL_KEYWORD_TO_ID.put(keyword.toLowerCase(), goalId);
+        for (String kw : keywords) {
+            GOAL_KEYWORD_TO_ID.put(kw.toLowerCase(), goalId);
         }
     }
 
+    // ── Primary entry point ───────────────────────────────────────────────────
+
     /**
-     * Parse a natural language goal into a goal ID using fast LLM inference.
-     * Falls back to keyword matching if LLM times out or fails.
+     * Parse a natural-language goal into a goal ID.
      *
-     * TEMPORARY: LLM parsing disabled for speed - using keywords only
+     * Fast path  : weighted token scorer (synonym-normalised), < 1 ms.
+     * Slow path  : edge LLM via Ollama (async, 3 s timeout), only on GOAL_UNKNOWN.
      */
     public static short parseGoal(String naturalLanguageGoal) {
         if (naturalLanguageGoal == null || naturalLanguageGoal.isEmpty()) {
             return GOAL_UNKNOWN;
         }
 
-        // TEMPORARY: Skip LLM parsing, go straight to keywords for speed
-        // TODO: Re-enable LLM parsing once we have a faster model or caching
-        return parseGoalWithKeywords(naturalLanguageGoal);
-
-        /* LLM parsing disabled for now - too slow
-        // Try LLM parsing first with timeout
-        try {
-            Future<Short> llmResult = EXECUTOR.submit(() -> parseGoalWithLLM(naturalLanguageGoal));
-            short goalId = llmResult.get(LLM_TIMEOUT_MS, TimeUnit.MILLISECONDS);
-
-            if (goalId != GOAL_UNKNOWN) {
-                LOGGER.info("✓ LLM parsed goal: '{}' → {} ({})",
-                    naturalLanguageGoal, goalId, getGoalName(goalId));
-                return goalId;
-            }
-        } catch (TimeoutException e) {
-            LOGGER.warn("⏱ LLM timeout for goal parsing, falling back to keywords");
-        } catch (Exception e) {
-            LOGGER.warn("⚠ LLM parsing failed: {}, falling back to keywords", e.getMessage());
+        // Step 1 — normalise with SynonymMap, then score tokens
+        short scored = parseGoalWithScoring(naturalLanguageGoal);
+        if (scored != GOAL_UNKNOWN) {
+            return scored;
         }
 
-        // Fallback to keyword matching
-        return parseGoalWithKeywords(naturalLanguageGoal);
-        */
+        LOGGER.info("Token scorer returned UNKNOWN for '{}', trying edge-LLM fallback…",
+            naturalLanguageGoal);
+
+        // Step 2 — edge-LLM fallback (async with hard timeout)
+        try {
+            Future<Short> future = EXECUTOR.submit(() -> parseGoalWithEdgeLLM(naturalLanguageGoal));
+            short llmResult = future.get(EDGE_LLM_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+            if (llmResult != GOAL_UNKNOWN) {
+                LOGGER.info("✓ Edge-LLM classified '{}' → {} ({})",
+                    naturalLanguageGoal, llmResult, getGoalName(llmResult));
+                return llmResult;
+            }
+        } catch (TimeoutException e) {
+            LOGGER.warn("⏱ Edge-LLM timed out after {}ms for '{}'",
+                EDGE_LLM_TIMEOUT_MS, naturalLanguageGoal);
+        } catch (Exception e) {
+            LOGGER.warn("⚠ Edge-LLM fallback failed: {}", e.getMessage());
+        }
+
+        LOGGER.warn("⚠ Could not classify '{}' — returning GOAL_UNKNOWN", naturalLanguageGoal);
+        return GOAL_UNKNOWN;
     }
 
+    // ── Weighted token scorer ─────────────────────────────────────────────────
+
     /**
-     * Parse goal using LLM with a very focused, fast prompt.
+     * Normalise input via {@link SynonymMap}, tokenise, then tally keyword hits
+     * per goal.  The goal with the highest tally wins.  Runs in O(tokens × keywords).
      */
-    private static short parseGoalWithLLM(String naturalLanguageGoal) {
+    private static short parseGoalWithScoring(String input) {
+        // 1. Synonym normalisation
+        String normalised = SynonymMap.normalize(input);
+        String lower      = normalised.toLowerCase();
+        String[] tokens   = lower.split("\\W+");
+
+        Map<Short, Integer> scores = new HashMap<>();
+
+        // 2. Score each token against the keyword map
+        for (String token : tokens) {
+            if (token.length() < 2) continue;
+            Short goalId = GOAL_KEYWORD_TO_ID.get(token);
+            if (goalId != null) {
+                scores.merge(goalId, 1, Integer::sum);
+            }
+        }
+
+        // 3. Also check multi-word keywords against the full normalised string
+        for (Map.Entry<String, Short> entry : GOAL_KEYWORD_TO_ID.entrySet()) {
+            if (entry.getKey().contains(" ") && lower.contains(entry.getKey())) {
+                scores.merge(entry.getValue(), 2, Integer::sum); // bonus weight for phrase match
+            }
+        }
+
+        if (scores.isEmpty()) {
+            return GOAL_UNKNOWN;
+        }
+
+        // 4. Return goal with highest accumulated score
+        short best = scores.entrySet().stream()
+            .max(Map.Entry.comparingByValue())
+            .map(Map.Entry::getKey)
+            .orElse(GOAL_UNKNOWN);
+
+        LOGGER.info("✓ Token scorer: '{}' → normalised='{}' → goalId={} ({})",
+            input, normalised, best, getGoalName(best));
+        return best;
+    }
+
+    // ── Edge-LLM fallback ─────────────────────────────────────────────────────
+
+    /**
+     * Fire a minimal classification prompt at a tiny edge model running via Ollama.
+     *
+     * The prompt is deliberately tiny: just the goal list + the input sentence.
+     * A single-digit response is all that is expected, so even a 135 M-param
+     * model (smollm2:135m) handles this in < 500 ms on a low-end CPU.
+     *
+     * Model selection order:
+     *  1. System property  aiplayer.edgeFallbackModel
+     *  2. Mod config       selectedLanguageModel  (if it looks like an edge model)
+     *  3. Hardcoded default: smollm2:135m
+     */
+    private static short parseGoalWithEdgeLLM(String naturalLanguageGoal) {
         String llmProvider = System.getProperty("aiplayer.llmMode", "ollama");
 
         try {
-            // Build goal list for prompt
+            // Build goal list
             StringBuilder goalList = new StringBuilder();
             for (short id : getAllGoalIds()) {
                 if (id != GOAL_UNKNOWN) {
@@ -117,168 +205,113 @@ public class GoalMapper {
             }
 
             String prompt = String.format(
-                "Classify this Minecraft goal into ONE category. Reply ONLY with the number.\n\n" +
-                "Categories: %s0=unknown\n\n" +
-                "Goal: \"%s\"\n\n" +
-                "Answer (number only):",
-                goalList,
-                naturalLanguageGoal
+                "Classify this Minecraft goal. Reply with ONE digit only.\n" +
+                "Categories: %s0=unknown\n" +
+                "Goal: \"%s\"\n" +
+                "Answer:",
+                goalList, naturalLanguageGoal
             );
 
-            String ThirdPartyProviderSystemPrompt = """
-                      You are an expert at classifying user intents into predefined categories.
-                      Given a Minecraft goal described in natural language, classify it into one of the predefined categories by responding with ONLY the corresponding number.
-                      Respond with ONLY the number corresponding to the category that best fits the goal.
-                    """;
+            final String systemPrompt =
+                "You classify Minecraft player goals. Reply with ONLY a single digit (0-9).";
 
             switch (llmProvider) {
 
-                case "ollama":
-                    // Use Ollama LLM
-                    // Build chat messages
-                    List<OllamaChatMessage> messages = new ArrayList<>();
-                    messages.add(new OllamaChatMessage(OllamaChatMessageRole.USER, prompt));
+                case "ollama": {
+                    String modelName = resolveEdgeModel();
+                    if (modelName == null) return GOAL_UNKNOWN;
 
-                    // Get configuration from AIPlayer
                     String host = "http://localhost:11434";
                     OllamaAPI ollamaAPI = new OllamaAPI(host);
-                    String modelName = AIPlayer.CONFIG.getSelectedLanguageModel();
-
-                    if (modelName == null || modelName.isEmpty()) {
-                        LOGGER.warn("No model selected in configuration");
-                        return GOAL_UNKNOWN;
-                    }
-
-                    // Use smartChat for fast inference (auto-detects if thinking is needed)
-                    OllamaThinkingResponse response = OllamaAPIHelper.smartChat(
-                            ollamaAPI,
-                            host,
-                            modelName,
-                            messages
+                    List<OllamaChatMessage> messages = List.of(
+                        new OllamaChatMessage(OllamaChatMessageRole.USER, prompt)
                     );
 
-                    String content = response.getContent();
+                    OllamaThinkingResponse response =
+                        OllamaAPIHelper.smartChat(ollamaAPI, host, modelName, messages);
+                    return extractGoalDigit(response.getContent());
+                }
 
-                    if (content == null || content.trim().isEmpty()) {
-                        return GOAL_UNKNOWN;
-                    }
-
-                    // Extract first number from response
-                    Pattern pattern = Pattern.compile("\\b([0-9])\\b");
-                    Matcher matcher = pattern.matcher(content);
-
-                    if (matcher.find()) {
-                        short goalId = Short.parseShort(matcher.group(1));
-                        if (isValidGoal(goalId) || goalId == GOAL_UNKNOWN) {
-                            return goalId;
-                        }
-                    }
-
-                    // Try parsing the whole response as a number
-                    try {
-                        short goalId = Short.parseShort(content.trim());
-                        if (isValidGoal(goalId) || goalId == GOAL_UNKNOWN) {
-                            return goalId;
-                        }
-                    } catch (NumberFormatException ignored) {}
-
-                    return GOAL_UNKNOWN;
-
-
-                case "openai", "gpt", "google", "gemini", "anthropic", "claude", "xAI", "xai", "grok", "custom":
+                case "openai", "gpt", "google", "gemini",
+                     "anthropic", "claude", "xAI", "xai", "grok", "custom": {
                     LLMClient llmClient = LLMClientFactory.createClient(llmProvider);
-
-                    if (llmClient == null) {
-                        LOGGER.warn("LLM client creation failed for provider: {}", llmProvider);
-                        return GOAL_UNKNOWN;
-                    }
-                    else {
-                        LOGGER.info("Using LLM client for provider: {}", llmProvider);
-                        String response1 = llmClient.sendPrompt(ThirdPartyProviderSystemPrompt, prompt);
-
-                        if (response1 == null || response1.trim().isEmpty()) {
-                            return GOAL_UNKNOWN;
-                        }
-
-                        // Extract first number from response
-                        Pattern pattern1 = Pattern.compile("\\b([0-9])\\b");
-                        Matcher matcher1 = pattern1.matcher(response1);
-                        if (matcher1.find()) {
-                            short goalId = Short.parseShort(matcher1.group(1));
-                            if (isValidGoal(goalId) || goalId == GOAL_UNKNOWN) {
-                                return goalId;
-                            }
-                        }
-                        // Try parsing the whole response as a number
-                        try {
-                            short goalId = Short.parseShort(response1.trim());
-                            if (isValidGoal(goalId) || goalId == GOAL_UNKNOWN) {
-                                return goalId;
-                            }
-                        } catch (NumberFormatException ignored) {}
-
-                        return GOAL_UNKNOWN;
-                    }
-
+                    if (llmClient == null) return GOAL_UNKNOWN;
+                    return extractGoalDigit(llmClient.sendPrompt(systemPrompt, prompt));
+                }
 
                 default:
-                    LOGGER.warn("Unsupported LLM mode: {}", llmProvider);
+                    LOGGER.warn("Unsupported LLM mode '{}' for edge fallback", llmProvider);
                     return GOAL_UNKNOWN;
             }
 
-
-
         } catch (Exception e) {
-            LOGGER.error("LLM goal parsing error: {}", e.getMessage());
+            LOGGER.error("Edge-LLM goal parsing error: {}", e.getMessage());
             return GOAL_UNKNOWN;
         }
     }
 
     /**
-     * Fallback keyword-based parsing.
+     * Determine which edge model to use.
+     * Priority: system property → mod config (if small model) → default.
      */
-    private static short parseGoalWithKeywords(String naturalLanguageGoal) {
-        String lower = naturalLanguageGoal.toLowerCase();
-
-        // Try to find matching keywords
-        for (Map.Entry<String, Short> entry : GOAL_KEYWORD_TO_ID.entrySet()) {
-            if (lower.contains(entry.getKey())) {
-                LOGGER.info("✓ Keyword matched goal: '{}' → {} ({})",
-                    naturalLanguageGoal, entry.getValue(), getGoalName(entry.getValue()));
-                return entry.getValue();
-            }
+    private static String resolveEdgeModel() {
+        // 1. Explicit override via system property
+        String prop = System.getProperty(EDGE_MODEL_PROP);
+        if (prop != null && !prop.isBlank()) {
+            LOGGER.info("Using edge model from system property: {}", prop);
+            return prop;
         }
 
-        LOGGER.warn("⚠ No goal match found for: '{}'", naturalLanguageGoal);
+        // 2. Mod config — use if it looks like an edge / small model
+        try {
+            String configured = AIPlayer.CONFIG.getSelectedLanguageModel();
+            if (configured != null && !configured.isBlank()) {
+                // Heuristic: treat as edge model if name contains known small-model identifiers
+                String lower = configured.toLowerCase();
+                if (lower.contains("smollm") || lower.contains("0.5b") ||
+                    lower.contains("1.5b")   || lower.contains("135m") ||
+                    lower.contains("360m")   || lower.contains("tinyllama") ||
+                    lower.contains("gemma3:1b") || lower.contains("qwen2.5:0.5b")) {
+                    LOGGER.info("Using configured model as edge model: {}", configured);
+                    return configured;
+                }
+            }
+        } catch (Exception e) {
+            LOGGER.debug("Could not read mod config for edge model: {}", e.getMessage());
+        }
+
+        // 3. Hardcoded default
+        LOGGER.info("Using default edge model: {}", EDGE_MODEL_DEFAULT);
+        return EDGE_MODEL_DEFAULT;
+    }
+
+    /** Extract the first valid goal digit from an LLM response string. */
+    private static short extractGoalDigit(String content) {
+        if (content == null || content.isBlank()) return GOAL_UNKNOWN;
+        Matcher m = Pattern.compile("\\b([0-9])\\b").matcher(content);
+        if (m.find()) {
+            short id = Short.parseShort(m.group(1));
+            if (isValidGoal(id) || id == GOAL_UNKNOWN) return id;
+        }
+        try { return Short.parseShort(content.trim()); } catch (NumberFormatException ignored) {}
         return GOAL_UNKNOWN;
     }
 
-    /**
-     * Get the human-readable name for a goal ID.
-     */
+    // ── Utility methods ───────────────────────────────────────────────────────
+
     public static String getGoalName(short goalId) {
         return GOAL_ID_TO_NAME.getOrDefault(goalId, "unknown");
     }
 
-    /**
-     * Get all registered goal IDs.
-     */
     public static short[] getAllGoalIds() {
-        List<Short> sortedIds = new ArrayList<>(GOAL_ID_TO_NAME.keySet());
-        Collections.sort(sortedIds);
-        short[] result = new short[sortedIds.size()];
-        for (int i = 0; i < sortedIds.size(); i++) {
-            result[i] = sortedIds.get(i);
-        }
+        List<Short> sorted = new ArrayList<>(GOAL_ID_TO_NAME.keySet());
+        Collections.sort(sorted);
+        short[] result = new short[sorted.size()];
+        for (int i = 0; i < sorted.size(); i++) result[i] = sorted.get(i);
         return result;
     }
 
-
-    /**
-     * Check if a goal ID is valid.
-     */
     public static boolean isValidGoal(short goalId) {
         return GOAL_ID_TO_NAME.containsKey(goalId);
     }
 }
-
