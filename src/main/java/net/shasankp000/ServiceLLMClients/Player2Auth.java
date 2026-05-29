@@ -30,7 +30,7 @@ import java.util.concurrent.ConcurrentHashMap;
  * <p>Usage:
  * <pre>
  *   // On first use, or if token missing:
- *   Player2Auth.startDeviceFlow(playerUUID, gameClientId, chatCallback);
+ *   Player2Auth.startDeviceFlow(playerUUID, chatCallback);
  *
  *   // In Player2Client.sendPrompt():
  *   String p2Key = Player2Auth.getToken(playerUUID);
@@ -40,14 +40,17 @@ public class Player2Auth {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("player2-auth");
 
-    private static final String API_BASE        = "https://api.player2.game/v1";
-    private static final String DEVICE_NEW_URL  = API_BASE + "/login/device/new";
+    /** Public game identifier registered on the Player2 developer dashboard. Not a secret. */
+    public static final String GAME_CLIENT_ID = "019e736f-1b44-7741-83de-aeb76f09c958";
+
+    private static final String API_BASE         = "https://api.player2.game/v1";
+    private static final String DEVICE_NEW_URL   = API_BASE + "/login/device/new";
     private static final String DEVICE_TOKEN_URL = API_BASE + "/login/device/token";
 
     /** Polling interval in milliseconds while waiting for user approval. */
-    private static final long POLL_INTERVAL_MS  = 5_000;
+    private static final long POLL_INTERVAL_MS = 5_000;
     /** Maximum time to wait for the user to approve the device (5 minutes). */
-    private static final long POLL_TIMEOUT_MS   = 5 * 60 * 1_000;
+    private static final long POLL_TIMEOUT_MS  = 5 * 60 * 1_000;
 
     private static final String TOKEN_DIR =
             LauncherEnvironment.getStorageDirectory("player2_tokens");
@@ -107,14 +110,13 @@ public class Player2Auth {
      * the calling code can relay messages to the Minecraft chat.
      *
      * @param playerUUID    the player who needs to authenticate
-     * @param gameClientId  your Player2 game_client_id from the developer dashboard
      * @param chatCallback  receives status/instruction strings to show the player
      */
-    public static void startDeviceFlow(UUID playerUUID, String gameClientId,
+    public static void startDeviceFlow(UUID playerUUID,
                                        java.util.function.Consumer<String> chatCallback) {
         Thread.ofVirtual().name("p2-device-flow-" + playerUUID).start(() -> {
             try {
-                runDeviceFlow(playerUUID, gameClientId, chatCallback);
+                runDeviceFlow(playerUUID, chatCallback);
             } catch (Exception e) {
                 LOGGER.error("[player2-auth] Device flow error for {}", playerUUID, e);
                 chatCallback.accept("§c[Player2] Authentication error: " + e.getMessage());
@@ -126,11 +128,11 @@ public class Player2Auth {
     // Internal: Device Flow
     // -------------------------------------------------------------------------
 
-    private static void runDeviceFlow(UUID playerUUID, String gameClientId,
+    private static void runDeviceFlow(UUID playerUUID,
                                       java.util.function.Consumer<String> chatCallback) throws Exception {
         // Step 1 — Request a device code
         JsonObject initBody = new JsonObject();
-        initBody.addProperty("game_client_id", gameClientId);
+        initBody.addProperty("game_client_id", GAME_CLIENT_ID);
 
         HttpRequest initReq = HttpRequest.newBuilder()
                 .uri(URI.create(DEVICE_NEW_URL))
@@ -164,7 +166,7 @@ public class Player2Auth {
 
             JsonObject pollBody = new JsonObject();
             pollBody.addProperty("device_code", deviceCode);
-            pollBody.addProperty("game_client_id", gameClientId);
+            pollBody.addProperty("game_client_id", GAME_CLIENT_ID);
 
             HttpRequest pollReq = HttpRequest.newBuilder()
                     .uri(URI.create(DEVICE_TOKEN_URL))
@@ -173,10 +175,9 @@ public class Player2Auth {
                     .build();
 
             HttpResponse<String> pollResp = HTTP.send(pollReq, HttpResponse.BodyHandlers.ofString());
-            String pollBody2 = pollResp.body();
 
             if (pollResp.statusCode() == 200) {
-                JsonObject tokenJson = JsonParser.parseString(pollBody2).getAsJsonObject();
+                JsonObject tokenJson = JsonParser.parseString(pollResp.body()).getAsJsonObject();
                 if (tokenJson.has("p2Key")) {
                     String p2Key = tokenJson.get("p2Key").getAsString();
                     TOKEN_CACHE.put(playerUUID, p2Key);
@@ -190,7 +191,7 @@ public class Player2Auth {
                 LOGGER.debug("[player2-auth] Still waiting for approval from {}", playerUUID);
             } else if (pollResp.statusCode() == 400) {
                 chatCallback.accept("§c[Player2] Auth expired or denied. Please try again.");
-                LOGGER.warn("[player2-auth] Device flow denied/expired for {}: {}", playerUUID, pollBody2);
+                LOGGER.warn("[player2-auth] Device flow denied/expired for {}: {}", playerUUID, pollResp.body());
                 return;
             }
         }
