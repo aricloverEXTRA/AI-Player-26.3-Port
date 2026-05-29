@@ -21,30 +21,45 @@ public class VectorExtensionHelper {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(VectorExtensionHelper.class);
 
-    // === SQLITE-VEC ===
-    private static final String WINDOWS_VEC_URL = "https://github.com/asg017/sqlite-vec/releases/download/v0.1.6/sqlite-vec-0.1.6-loadable-windows-x86_64.tar.gz";
-    private static final String LINUX_VEC_URL = "https://github.com/asg017/sqlite-vec/releases/download/v0.1.6/sqlite-vec-0.1.6-loadable-linux-x86_64.tar.gz";
-    private static final String MACOS_VEC_URL = "https://github.com/asg017/sqlite-vec/releases/download/v0.1.6/sqlite-vec-0.1.6-loadable-macos-x86_64.tar.gz";
+    // === SQLITE-VEC download URLs ===
+    private static final String WINDOWS_VEC_URL        = "https://github.com/asg017/sqlite-vec/releases/download/v0.1.6/sqlite-vec-0.1.6-loadable-windows-x86_64.tar.gz";
+    private static final String LINUX_X86_VEC_URL      = "https://github.com/asg017/sqlite-vec/releases/download/v0.1.6/sqlite-vec-0.1.6-loadable-linux-x86_64.tar.gz";
+    private static final String LINUX_ARM64_VEC_URL    = "https://github.com/asg017/sqlite-vec/releases/download/v0.1.6/sqlite-vec-0.1.6-loadable-linux-aarch64.tar.gz";
+    private static final String MACOS_X86_VEC_URL      = "https://github.com/asg017/sqlite-vec/releases/download/v0.1.6/sqlite-vec-0.1.6-loadable-macos-x86_64.tar.gz";
+    private static final String MACOS_ARM64_VEC_URL    = "https://github.com/asg017/sqlite-vec/releases/download/v0.1.6/sqlite-vec-0.1.6-loadable-macos-aarch64.tar.gz";
 
     private static final String VECTOR_FILENAME_WINDOWS = "vec0.dll";
-    private static final String VECTOR_FILENAME_LINUX = "vec0.so";
-    private static final String VECTOR_FILENAME_MACOS = "vec0.dylib";
+    private static final String VECTOR_FILENAME_LINUX   = "vec0.so";
+    private static final String VECTOR_FILENAME_MACOS   = "vec0.dylib";
 
-    // === SQLITE-VSS ===
-    private static final String VSS_LINUX_URL = "https://github.com/asg017/sqlite-vss/releases/download/v0.1.2/sqlite-vss-v0.1.2-loadable-linux-x86_64.tar.gz";
-    private static final String VSS_MACOS_URL = "https://github.com/asg017/sqlite-vss/releases/download/v0.1.2/sqlite-vss-v0.1.2-loadable-macos-x86_64.tar.gz";
+    // === SQLITE-VSS download URLs ===
+    private static final String VSS_LINUX_X86_URL      = "https://github.com/asg017/sqlite-vss/releases/download/v0.1.2/sqlite-vss-v0.1.2-loadable-linux-x86_64.tar.gz";
+    private static final String VSS_LINUX_ARM64_URL    = "https://github.com/asg017/sqlite-vss/releases/download/v0.1.2/sqlite-vss-v0.1.2-loadable-linux-aarch64.tar.gz";
+    private static final String VSS_MACOS_X86_URL      = "https://github.com/asg017/sqlite-vss/releases/download/v0.1.2/sqlite-vss-v0.1.2-loadable-macos-x86_64.tar.gz";
+    private static final String VSS_MACOS_ARM64_URL    = "https://github.com/asg017/sqlite-vss/releases/download/v0.1.2/sqlite-vss-v0.1.2-loadable-macos-aarch64.tar.gz";
 
     private static final String VSS_FILENAME_LINUX = "vss0.so";
     private static final String VSS_FILENAME_MACOS = "vss0.dylib";
 
-    // === HELPER METHODS ===
+    // =========================================================================
+    // Architecture helpers
+    // =========================================================================
 
     /**
-     * Clean up old incorrectly-named extension files from buggy versions.
+     * Returns true if the JVM is running on an ARM64 / Apple-Silicon CPU.
+     * Checks os.arch for: aarch64, arm64, armv8.
      */
+    private static boolean isArm64() {
+        String arch = System.getProperty("os.arch", "").toLowerCase(Locale.ENGLISH);
+        return arch.contains("aarch64") || arch.contains("arm64") || arch.contains("armv8");
+    }
+
+    // =========================================================================
+    // Cleanup
+    // =========================================================================
+
     private static void cleanupOldVecFiles(Path dir, String correctName) {
         try {
-            // List of old incorrect names that might exist
             String[] oldNames = {"vector0.dll", "vector0.so", "vector0.dylib"};
             for (String oldName : oldNames) {
                 if (!oldName.equals(correctName)) {
@@ -60,35 +75,41 @@ public class VectorExtensionHelper {
         }
     }
 
-    // === SQLITE-VEC ===
+    // =========================================================================
+    // SQLITE-VEC
+    // =========================================================================
 
     public static Path ensureSqliteVecPresent() throws IOException {
         String osName = System.getProperty("os.name").toLowerCase(Locale.ENGLISH);
+        boolean arm64  = isArm64();
+
         String downloadUrl;
         String targetFileName;
 
         if (osName.contains("win")) {
-            downloadUrl = WINDOWS_VEC_URL;
+            // Windows ARM64 builds are not yet published by asg017; x86_64 runs
+            // under emulation on Windows on ARM so use it as a fallback.
+            downloadUrl    = WINDOWS_VEC_URL;
             targetFileName = VECTOR_FILENAME_WINDOWS;
         } else if (osName.contains("nux") || osName.contains("nix")) {
-            downloadUrl = LINUX_VEC_URL;
+            downloadUrl    = arm64 ? LINUX_ARM64_VEC_URL : LINUX_X86_VEC_URL;
             targetFileName = VECTOR_FILENAME_LINUX;
         } else if (osName.contains("mac")) {
-            downloadUrl = MACOS_VEC_URL;
+            downloadUrl    = arm64 ? MACOS_ARM64_VEC_URL : MACOS_X86_VEC_URL;
             targetFileName = VECTOR_FILENAME_MACOS;
         } else {
-            throw new UnsupportedOperationException("Unsupported OS for SQLite-Vec");
+            throw new UnsupportedOperationException("Unsupported OS for SQLite-Vec: " + osName);
         }
 
+        LOGGER.info("💻 Detected OS='{}' arch='{}' arm64={}",
+                osName, System.getProperty("os.arch"), arm64);
+
         Path configDir = FabricLoader.getInstance().getConfigDir();
-        Path vecDir = configDir.resolve("sqlite_vector/sqlite-vec");
-        if (!Files.exists(vecDir)) {
-            Files.createDirectories(vecDir);
-        }
+        Path vecDir    = configDir.resolve("sqlite_vector/sqlite-vec");
+        if (!Files.exists(vecDir)) Files.createDirectories(vecDir);
 
         Path outputPath = vecDir.resolve(targetFileName);
 
-        // Clean up old incorrectly-named files (from previous buggy versions)
         cleanupOldVecFiles(vecDir, targetFileName);
 
         if (Files.exists(outputPath)) {
@@ -97,18 +118,16 @@ public class VectorExtensionHelper {
         }
 
         LOGGER.info("⬇️ Downloading sqlite-vec from {}", downloadUrl);
-        Path gzPath = vecDir.resolve("sqlite-vec.tar.gz");
+        Path gzPath  = vecDir.resolve("sqlite-vec.tar.gz");
         Path tarPath = vecDir.resolve("sqlite-vec.tar");
 
         try (InputStream in = new URL(downloadUrl).openStream()) {
             Files.copy(in, gzPath, StandardCopyOption.REPLACE_EXISTING);
         }
-
         try (GZIPInputStream gzipIn = new GZIPInputStream(Files.newInputStream(gzPath));
              OutputStream out = Files.newOutputStream(tarPath)) {
             gzipIn.transferTo(out);
         }
-
         try (InputStream tarIn = Files.newInputStream(tarPath)) {
             boolean found = safeExtractTar(tarIn, targetFileName, outputPath);
             if (!found) throw new IOException("❌ sqlite-vec extraction failed!");
@@ -118,48 +137,49 @@ public class VectorExtensionHelper {
         return outputPath;
     }
 
-    // === SQLITE-VSS ===
+    // =========================================================================
+    // SQLITE-VSS
+    // =========================================================================
 
     public static Path ensureSqliteVssPresent() throws IOException {
         String osName = System.getProperty("os.name").toLowerCase(Locale.ENGLISH);
+        boolean arm64  = isArm64();
+
         String downloadUrl;
         String targetFileName;
 
         if (osName.contains("nux") || osName.contains("nix")) {
-            downloadUrl = VSS_LINUX_URL;
+            downloadUrl    = arm64 ? VSS_LINUX_ARM64_URL : VSS_LINUX_X86_URL;
             targetFileName = VSS_FILENAME_LINUX;
         } else if (osName.contains("mac")) {
-            downloadUrl = VSS_MACOS_URL;
+            downloadUrl    = arm64 ? VSS_MACOS_ARM64_URL : VSS_MACOS_X86_URL;
             targetFileName = VSS_FILENAME_MACOS;
         } else {
-            throw new UnsupportedOperationException("sqlite-vss is not supported on this OS");
+            throw new UnsupportedOperationException("sqlite-vss is not supported on this OS: " + osName);
         }
 
+        LOGGER.info("💻 Detected OS='{}' arch='{}' arm64={}",
+                osName, System.getProperty("os.arch"), arm64);
+
         Path configDir = FabricLoader.getInstance().getConfigDir();
-        Path vssDir = configDir.resolve("sqlite_vector/sqlite-vss");
-        if (!Files.exists(vssDir)) {
-            Files.createDirectories(vssDir);
-        }
+        Path vssDir    = configDir.resolve("sqlite_vector/sqlite-vss");
+        if (!Files.exists(vssDir)) Files.createDirectories(vssDir);
 
         Path outputPath = vssDir.resolve(targetFileName);
 
-        // Clean up old files and any vector0.* files that shouldn't be here
+        // Clean up stale files
         try {
             String[] unwantedFiles = {"vector0.so", "vector0.dylib"};
             for (String unwanted : unwantedFiles) {
-                Path unwantedFile = vssDir.resolve(unwanted);
-                if (Files.exists(unwantedFile)) {
-                    Files.delete(unwantedFile);
-                    LOGGER.info("🧹 Cleaned up unwanted file from vss directory: {}", unwantedFile);
-                }
+                Path f = vssDir.resolve(unwanted);
+                if (Files.exists(f)) { Files.delete(f); LOGGER.info("🧹 Cleaned up: {}", f); }
             }
         } catch (IOException e) {
             LOGGER.warn("⚠️ Failed to clean up unwanted files: {}", e.getMessage());
         }
 
-        // Also determine vector0 filename (dependency of vss0)
         String vector0FileName = osName.contains("nux") || osName.contains("nix") ? "vector0.so" : "vector0.dylib";
-        Path vector0OutputPath = vssDir.resolve(vector0FileName);
+        Path   vector0OutputPath = vssDir.resolve(vector0FileName);
 
         if (Files.exists(outputPath) && Files.exists(vector0OutputPath)) {
             LOGGER.info("✅ sqlite-vss already present at: {}", outputPath);
@@ -167,25 +187,20 @@ public class VectorExtensionHelper {
         }
 
         LOGGER.info("⬇️ Downloading sqlite-vss from {}", downloadUrl);
-        Path gzPath = vssDir.resolve("sqlite-vss.tar.gz");
+        Path gzPath  = vssDir.resolve("sqlite-vss.tar.gz");
         Path tarPath = vssDir.resolve("sqlite-vss.tar");
 
         try (InputStream in = new URL(downloadUrl).openStream()) {
             Files.copy(in, gzPath, StandardCopyOption.REPLACE_EXISTING);
         }
-
         try (GZIPInputStream gzipIn = new GZIPInputStream(Files.newInputStream(gzPath));
              OutputStream out = Files.newOutputStream(tarPath)) {
             gzipIn.transferTo(out);
         }
-
-        // Extract vss0 (main extension)
         try (InputStream tarIn = Files.newInputStream(tarPath)) {
             boolean found = safeExtractTar(tarIn, targetFileName, outputPath);
             if (!found) throw new IOException("❌ sqlite-vss extraction failed!");
         }
-
-        // Extract vector0 (required dependency of vss0)
         try (InputStream tarIn = Files.newInputStream(tarPath)) {
             boolean found = safeExtractTar(tarIn, vector0FileName, vector0OutputPath);
             if (!found) LOGGER.warn("⚠️ vector0 not found in archive — vss0 may fail to load");
@@ -195,6 +210,10 @@ public class VectorExtensionHelper {
         LOGGER.info("✅ sqlite-vss ready at: {}", outputPath);
         return outputPath;
     }
+
+    // =========================================================================
+    // Extension loaders
+    // =========================================================================
 
     public static void loadSqliteVector0Extension(Connection conn, Path vssDir) throws SQLException {
         String osName = System.getProperty("os.name").toLowerCase(Locale.ENGLISH);
@@ -215,26 +234,88 @@ public class VectorExtensionHelper {
         }
     }
 
-    /**
-     * Shared TAR extractor - extracts only the specified file from a TAR archive.
-     */
+    public static void loadSqliteVecExtension(Connection conn, Path vecPath) throws SQLException, IOException {
+        String path = vecPath.toAbsolutePath().toString()
+                .replaceAll("\\.(dll|so|dylib)$", "")
+                .replace("\\", "\\\\");
+        try (Statement stmt = conn.createStatement()) {
+            stmt.execute("SELECT load_extension('" + path + "', 'sqlite3_vec_init');");
+            LOGGER.info("✅ Loaded sqlite-vec extension");
+            ResultSet rs = stmt.executeQuery("SELECT vec_version();");
+            if (rs.next()) LOGGER.info("✅ sqlite-vec version: {}", rs.getString(1));
+        }
+    }
+
+    public static void loadSqliteVssExtension(Connection conn, Path vssPath) throws SQLException, IOException {
+        String path = vssPath.toAbsolutePath().toString()
+                .replaceAll("\\.(dll|so|dylib)$", "")
+                .replace("\\", "\\\\");
+        try (Statement stmt = conn.createStatement()) {
+            stmt.execute("SELECT load_extension('" + path + "', 'sqlite3_vss_init');");
+            LOGGER.info("✅ Loaded sqlite-vss extension");
+            ResultSet rs = stmt.executeQuery("SELECT vss_version();");
+            if (rs.next()) LOGGER.info("✅ sqlite-vss version: {}", rs.getString(1));
+        }
+    }
+
+    // =========================================================================
+    // Fallback: cosine_distance UDF (Windows only)
+    // =========================================================================
+
+    public static void registerCosineDistanceIfNeeded(Connection conn) throws SQLException {
+        String osName = System.getProperty("os.name").toLowerCase(Locale.ENGLISH);
+        if (!osName.contains("win")) return;
+
+        try {
+            Function.create(conn, "cosine_distance", new Function() {
+                @Override
+                protected void xFunc() throws SQLException {
+                    if (args() != 2) throw new SQLException("cosine_distance() requires exactly 2 arguments");
+
+                    double[] v1 = parseVectorLiteral(value_text(0));
+                    double[] v2 = parseVectorLiteral(value_text(1));
+
+                    if (v1.length != v2.length) throw new SQLException("Vector dimensions do not match");
+
+                    double dot = 0.0, norm1 = 0.0, norm2 = 0.0;
+                    for (int i = 0; i < v1.length; i++) {
+                        dot   += v1[i] * v2[i];
+                        norm1 += v1[i] * v1[i];
+                        norm2 += v2[i] * v2[i];
+                    }
+                    result(1.0 - dot / (Math.sqrt(norm1) * Math.sqrt(norm2) + 1e-10));
+                }
+
+                private double[] parseVectorLiteral(String literal) {
+                    String[] parts = literal.replaceAll("[\\[\\]]", "").split(",");
+                    double[] vec = new double[parts.length];
+                    for (int i = 0; i < parts.length; i++) vec[i] = Double.parseDouble(parts[i].trim());
+                    return vec;
+                }
+            });
+            LOGGER.info("✅ Registered fallback cosine_distance for Windows (TEXT VECTOR)");
+        } catch (SQLException e) {
+            LOGGER.error("❌ Failed to register cosine_distance UDF: {}", e.getMessage(), e);
+            throw e;
+        }
+    }
+
+    // =========================================================================
+    // TAR extraction
+    // =========================================================================
+
     private static long parseTarSize(byte[] header, int offset) {
-        // Base-256 encoding: first byte is 0x80 or 0xFF
         if ((header[offset] & 0x80) != 0) {
             long val = 0;
-            for (int i = 1; i < 12; i++) {
-                val = (val << 8) | (header[offset + i] & 0xFF);
-            }
+            for (int i = 1; i < 12; i++) val = (val << 8) | (header[offset + i] & 0xFF);
             return val;
         }
-        // Standard octal: strip nulls and spaces, then parse
         StringBuilder sb = new StringBuilder();
         for (int i = offset; i < offset + 12; i++) {
             char c = (char) (header[i] & 0xFF);
             if (c >= '0' && c <= '7') sb.append(c);
         }
-        if (sb.length() == 0) return 0;
-        return Long.parseLong(sb.toString(), 8);
+        return sb.length() == 0 ? 0 : Long.parseLong(sb.toString(), 8);
     }
 
     private static boolean safeExtractTar(InputStream tarInputStream, String targetFileName, Path outputPath) throws IOException {
@@ -248,31 +329,27 @@ public class VectorExtensionHelper {
             String name = new String(header, 0, 100).trim();
             if (name.isEmpty()) break;
 
-            long size = parseTarSize(header, 124);
+            long size    = parseTarSize(header, 124);
+            boolean isMatch = name.equals(targetFileName) || name.endsWith("/" + targetFileName);
 
             LOGGER.info("🔍 TAR entry: {} ({} bytes)", name, size);
 
-            // Only extract the exact file we're looking for (handle both bare names and paths)
-            boolean isMatch = name.equals(targetFileName) || name.endsWith("/" + targetFileName);
-
             if (isMatch) {
-                LOGGER.info("✅ Found target file '{}' in archive, extracting to: {}", targetFileName, outputPath);
+                LOGGER.info("✅ Found '{}' in archive, extracting to: {}", targetFileName, outputPath);
                 try (OutputStream out = Files.newOutputStream(outputPath)) {
-                    byte[] buffer = new byte[4096];
+                    byte[] buf = new byte[4096];
                     long remaining = size;
                     while (remaining > 0) {
-                        int len = tarInputStream.read(buffer, 0, (int) Math.min(buffer.length, remaining));
+                        int len = tarInputStream.read(buf, 0, (int) Math.min(buf.length, remaining));
                         if (len == -1) break;
-                        out.write(buffer, 0, len);
+                        out.write(buf, 0, len);
                         remaining -= len;
                     }
                 }
                 LOGGER.info("✅ Successfully extracted: {}", outputPath);
                 found = true;
-                // Continue to skip remaining entries
             }
 
-            // Skip this entry's data (including padding to 512-byte boundary)
             long skip = size + (512 - (size % 512)) % 512;
             if (!isMatch) {
                 while (skip > 0) {
@@ -282,96 +359,8 @@ public class VectorExtensionHelper {
                 }
             }
         }
-
         return found;
     }
-
-    public static void loadSqliteVecExtension(Connection conn, Path vecPath) throws SQLException, IOException {
-        // Remove extension from path as SQLite will add it automatically
-        String path = vecPath.toAbsolutePath().toString();
-        // Strip extension (.dll, .so, .dylib) from the end
-        path = path.replaceAll("\\.(dll|so|dylib)$", "");
-        path = path.replace("\\", "\\\\");
-
-        try (Statement stmt = conn.createStatement()) {
-            stmt.execute("SELECT load_extension('" + path + "', 'sqlite3_vec_init');");
-            LOGGER.info("✅ Loaded sqlite-vec extension");
-            ResultSet rs = stmt.executeQuery("SELECT vec_version();");
-            if (rs.next()) LOGGER.info("✅ sqlite-vec version: {}", rs.getString(1));
-        }
-    }
-
-    public static void loadSqliteVssExtension(Connection conn, Path vssPath) throws SQLException, IOException {
-        // Remove extension from path as SQLite will add it automatically
-        String path = vssPath.toAbsolutePath().toString();
-        // Strip extension (.dll, .so, .dylib) from the end
-        path = path.replaceAll("\\.(dll|so|dylib)$", "");
-        path = path.replace("\\", "\\\\");
-
-        try (Statement stmt = conn.createStatement()) {
-            stmt.execute("SELECT load_extension('" + path + "', 'sqlite3_vss_init');");
-            LOGGER.info("✅ Loaded sqlite-vss extension");
-            ResultSet rs = stmt.executeQuery("SELECT vss_version();");
-            if (rs.next()) LOGGER.info("✅ sqlite-vss version: {}", rs.getString(1));
-        }
-    }
-
-
-    public static void registerCosineDistanceIfNeeded(Connection conn) throws SQLException {
-        String osName = System.getProperty("os.name").toLowerCase(Locale.ENGLISH);
-        if (!osName.contains("win")) {
-            return; // Only needed for Windows fallback
-        }
-
-        try {
-            Function.create(conn, "cosine_distance", new Function() {
-                @Override
-                protected void xFunc() throws SQLException {
-                    if (args() != 2) {
-                        throw new SQLException("cosine_distance() requires exactly 2 arguments");
-                    }
-
-                    String v1Str = value_text(0);
-                    String v2Str = value_text(1);
-
-                    double[] v1 = parseVectorLiteral(v1Str);
-                    double[] v2 = parseVectorLiteral(v2Str);
-
-                    if (v1.length != v2.length) {
-                        throw new SQLException("Vector dimensions do not match");
-                    }
-
-                    double dot = 0.0, norm1 = 0.0, norm2 = 0.0;
-                    for (int i = 0; i < v1.length; i++) {
-                        dot += v1[i] * v2[i];
-                        norm1 += v1[i] * v1[i];
-                        norm2 += v2[i] * v2[i];
-                    }
-
-                    double sim = dot / (Math.sqrt(norm1) * Math.sqrt(norm2) + 1e-10);
-                    result(1.0 - sim);
-                }
-
-                private double[] parseVectorLiteral(String literal) {
-                    // Remove brackets and split
-                    String cleaned = literal.replaceAll("[\\[\\]]", "");
-                    String[] parts = cleaned.split(",");
-                    double[] vec = new double[parts.length];
-                    for (int i = 0; i < parts.length; i++) {
-                        vec[i] = Double.parseDouble(parts[i].trim());
-                    }
-                    return vec;
-                }
-            });
-
-            LOGGER.info("✅ Registered fallback cosine_distance for Windows (TEXT VECTOR)");
-        } catch (SQLException e) {
-            LOGGER.error("❌ Failed to register cosine_distance UDF: {}", e.getMessage(), e);
-            throw e;
-        }
-    }
-
-
 
     private static double[] deserializeVector(byte[] bytes) {
         ByteBuffer buffer = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
