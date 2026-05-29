@@ -17,6 +17,7 @@ import net.shasankp000.ChatUtils.NLPProcessor;
 import net.shasankp000.Database.SQLiteDB;
 import net.shasankp000.Exception.intentMisclassification;
 import net.shasankp000.FunctionCaller.FunctionCallerV2;
+import net.shasankp000.GameAI.autonomous.AutonomousManager;
 import net.shasankp000.Overlay.ThinkingStateManager;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,12 +51,18 @@ public class ollamaClient {
         }
         ServerCommandSource botSource = bot.getCommandSource().withSilent().withMaxLevel(4);
 
+        // A human is now talking to the bot — pause autonomous loop
+        AutonomousManager.getInstance().setPlayerControlled(botName, true);
+
         server.execute(() -> {
             try {
                 routeIntent(message, botSource, playerUUID);
             } catch (Exception e) {
                 LOGGER.error("Chat processing error: ", e);
                 ChatUtils.sendChatMessages(botSource, "⚠️ I'm confused! Please report this.");
+            } finally {
+                // Resume autonomous loop after the interaction is handled
+                AutonomousManager.getInstance().setPlayerControlled(botName, false);
             }
         });
     }
@@ -76,12 +83,17 @@ public class ollamaClient {
             server.getCommandManager().executeWithPrefix(botSource, "/say Processing your message, please wait.");
         });
 
+        // Pause autonomous loop while the command message is handled
+        AutonomousManager.getInstance().setPlayerControlled(botName, true);
+
         server.execute(() -> {
             try {
                 routeIntent(message, botSource, Objects.requireNonNull(playerSource.getPlayer()).getUuid());
             } catch (Exception e) {
                 LOGGER.error("NLP error: ", e);
                 ChatUtils.sendChatMessages(botSource, "⚠️ NLP issue. Report to developer.");
+            } finally {
+                AutonomousManager.getInstance().setPlayerControlled(botName, false);
             }
         });
     }
@@ -132,7 +144,7 @@ public class ollamaClient {
                         LOGGER.info("🧵 Started FunctionCallerV2 retry worker thread");
                         new FunctionCallerV2(botSource, playerUUID);
                         FunctionCallerV2.run(message);
-                        LOGGER.info("✅ Finished FunctionCallerV2 retry worker thread");
+                        LOGGER.info("✅ Finished FunctionCallerV2 worker thread");
                     });
                 } else {
                     throw new intentMisclassification("LLM failed to classify intent.");
@@ -212,6 +224,13 @@ public class ollamaClient {
 
                     isInitialized = true;
                     success = true;
+
+                    // ── Start the autonomous goal engine for this bot ──────────────────
+                    ServerPlayerEntity botPlayer = server.getPlayerManager().getPlayer(botName);
+                    UUID botUUID = botPlayer != null ? botPlayer.getUuid() : UUID.randomUUID();
+                    LOGGER.info("[autonomous] Handing off to AutonomousManager for bot '{}'", botName);
+                    AutonomousManager.getInstance().startBot(botName, botUUID);
+                    // ──────────────────────────────────────────────────────────────────
 
                 } catch (HttpTimeoutException e) {
                     retries++;

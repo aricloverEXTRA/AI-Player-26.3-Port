@@ -17,6 +17,8 @@ import net.shasankp000.Database.QTable;
 import net.shasankp000.Database.SQLiteDB;
 import net.shasankp000.FilingSystem.ManualConfig;
 import net.shasankp000.GameAI.BotEventHandler;
+import net.shasankp000.GameAI.autonomous.AutonomousManager;
+import net.shasankp000.GameAI.autonomous.ServerChatEventBridge;
 
 import net.shasankp000.Database.QTableStorage;
 import net.shasankp000.Entity.AutoFaceEntity;
@@ -87,6 +89,10 @@ public class AIPlayer implements ModInitializer {
 		SQLiteDB.createDB();
 		QTableStorage.setupQTableStorage();
 
+		// Register the server-side chat bridge so WorldEventListener receives
+		// join/leave/death/advancement messages for all bots.
+		ServerChatEventBridge.register();
+
 
 		CompletableFuture.runAsync(() -> {
 
@@ -131,6 +137,8 @@ public class AIPlayer implements ModInitializer {
 
 			AutoFaceEntity.onServerStopped(server);
 
+			// Gracefully shut down all autonomous goal engines
+			AutonomousManager.getInstance().stopAll();
 
 			try {
 				if (modelManager.isModelLoaded() || loadedBERTModelIntoMemory) {
