@@ -4,7 +4,6 @@ import com.google.gson.JsonArray;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import net.shasankp000.AIPlayer;
-import net.shasankp000.ChatUtils.ChatUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -26,7 +25,7 @@ import java.util.function.Consumer;
  *   <li><b>Per-user auth</b> — each Minecraft player authenticates with their
  *       own Player2 account via OAuth2 Device Flow ({@link Player2Auth}).
  *       There is no single server-side API key.</li>
- *   <li><b>Joules currency</b> — requests are charged against the player’s
+ *   <li><b>Joules currency</b> — requests are charged against the player's
  *       Player2 balance. A 402 response means they have run out.</li>
  *   <li><b>Mandatory health ping</b> — Player2 ToS requires
  *       {@code GET /health} every 60 s while the bot is active to attribute
@@ -35,38 +34,37 @@ import java.util.function.Consumer;
  *
  * <p>The chat completions endpoint is OpenAI-compatible, so the request/
  * response shape mirrors {@link GenericOpenAIClient}.
+ *
+ * <p>The {@code game_client_id} is hardcoded in {@link Player2Auth#GAME_CLIENT_ID}
+ * and is read from there — it does not need to be passed in or configured by
+ * the end user.
  */
 public class Player2Client implements LLMClient {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("player2-client");
 
-    private static final String BASE_URL          = "https://api.player2.game/v1/";
-    private static final String COMPLETIONS_PATH  = "chat/completions";
-    private static final String HEALTH_PATH        = "health";
-    private static final String JOULES_PATH        = "joules";
+    private static final String BASE_URL         = "https://api.player2.game/v1/";
+    private static final String COMPLETIONS_PATH = "chat/completions";
+    private static final String HEALTH_PATH      = "health";
 
-    private final String modelName;
-    private final String gameClientId;
-    private final UUID   playerUUID;
-    private final Consumer<String> chatCallback;   // to send auth prompts into game chat
+    private final String   modelName;
+    private final UUID     playerUUID;
+    private final Consumer<String> chatCallback;
 
     private final HttpClient http;
     private final ScheduledExecutorService pinger;
 
     /**
-     * @param playerUUID    Minecraft player UUID — used to look up their p2Key
-     * @param gameClientId  Your Player2 game_client_id from the developer dashboard
-     * @param modelName     Model to request (e.g. "gpt-4o", or whatever Player2 exposes)
-     * @param chatCallback  Consumer that sends a string into Minecraft chat
+     * @param playerUUID   Minecraft player UUID — used to look up their p2Key
+     * @param modelName    Model to request (e.g. "gpt-4o", or whatever Player2 exposes)
+     * @param chatCallback Consumer that sends a string into Minecraft chat
      */
-    public Player2Client(UUID playerUUID, String gameClientId, String modelName,
-                         Consumer<String> chatCallback) {
-        this.playerUUID    = playerUUID;
-        this.gameClientId  = gameClientId;
-        this.modelName     = modelName;
-        this.chatCallback  = chatCallback;
-        this.http          = HttpClient.newHttpClient();
-        this.pinger        = Executors.newSingleThreadScheduledExecutor(
+    public Player2Client(UUID playerUUID, String modelName, Consumer<String> chatCallback) {
+        this.playerUUID   = playerUUID;
+        this.modelName    = modelName;
+        this.chatCallback = chatCallback;
+        this.http         = HttpClient.newHttpClient();
+        this.pinger       = Executors.newSingleThreadScheduledExecutor(
                 r -> Thread.ofVirtual().name("p2-health-ping").unstarted(r));
 
         startHealthPing();
@@ -112,7 +110,6 @@ public class Player2Client implements LLMClient {
             return switch (resp.statusCode()) {
                 case 200 -> parseContent(resp.body());
                 case 401 -> {
-                    // Token expired — clear and re-auth
                     LOGGER.warn("[player2] Token expired for {}. Clearing and re-authenticating.", playerUUID);
                     Player2Auth.clearToken(playerUUID);
                     triggerReAuth();
@@ -120,7 +117,7 @@ public class Player2Client implements LLMClient {
                 }
                 case 402 -> {
                     LOGGER.warn("[player2] Player {} has insufficient Joules.", playerUUID);
-                    chatCallback.accept("§c[Player2] You’ve run out of Joules! Top up at player2.game to continue.");
+                    chatCallback.accept("§c[Player2] You've run out of Joules! Top up at player2.game to continue.");
                     yield "";
                 }
                 default -> {
@@ -136,12 +133,11 @@ public class Player2Client implements LLMClient {
     }
 
     /**
-     * Checks reachability via {@code GET /health} and validates the player’s
+     * Checks reachability via {@code GET /health} and validates the player's
      * token exists. Triggers Device Flow auth if not yet authenticated.
      */
     @Override
     public boolean isReachable() {
-        // Check health endpoint first
         try {
             HttpRequest ping = HttpRequest.newBuilder()
                     .uri(URI.create(BASE_URL + HEALTH_PATH))
@@ -159,7 +155,7 @@ public class Player2Client implements LLMClient {
         // Ensure player has a token — kick off Device Flow if not
         if (!Player2Auth.hasToken(playerUUID)) {
             LOGGER.info("[player2] No token for player {} — starting Device Flow", playerUUID);
-            Player2Auth.startDeviceFlow(playerUUID, gameClientId, chatCallback);
+            Player2Auth.startDeviceFlow(playerUUID, chatCallback);
             return false; // not ready yet; LLMServiceHandler will retry after auth completes
         }
 
@@ -178,7 +174,7 @@ public class Player2Client implements LLMClient {
     private void startHealthPing() {
         pinger.scheduleAtFixedRate(() -> {
             String p2Key = Player2Auth.getToken(playerUUID);
-            if (p2Key == null) return; // Not authenticated yet, skip
+            if (p2Key == null) return;
             try {
                 HttpRequest ping = HttpRequest.newBuilder()
                         .uri(URI.create(BASE_URL + HEALTH_PATH))
@@ -203,10 +199,6 @@ public class Player2Client implements LLMClient {
     // Helpers
     // -------------------------------------------------------------------------
 
-    /**
-     * Resolves the p2Key for the current player, triggering Device Flow
-     * auth if none is present.
-     */
     private String resolveToken() {
         String token = Player2Auth.getToken(playerUUID);
         if (token == null) {
@@ -218,7 +210,7 @@ public class Player2Client implements LLMClient {
 
     private void triggerReAuth() {
         chatCallback.accept("§e[Player2] Re-authentication needed. Starting login...");
-        Player2Auth.startDeviceFlow(playerUUID, gameClientId, chatCallback);
+        Player2Auth.startDeviceFlow(playerUUID, chatCallback);
     }
 
     private static String parseContent(String json) {
