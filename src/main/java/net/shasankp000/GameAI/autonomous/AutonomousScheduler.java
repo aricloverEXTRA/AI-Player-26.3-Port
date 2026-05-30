@@ -3,6 +3,7 @@ package net.shasankp000.GameAI.autonomous;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.shasankp000.AIPlayer;
 import net.shasankp000.GameAI.BotEventHandler;
+import net.shasankp000.PathFinding.BotStance;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -20,7 +21,10 @@ import java.util.concurrent.TimeUnit;
  *       of goals via {@link AutonomousGoalEngine#triggerReplan()}.</li>
  *   <li><b>State drift check</b> (default every 30 s) — reads the bot's
  *       current game state and can insert a priority goal if something important
- *       has changed (e.g. inventory nearly full, bot is lost, etc.).</li>
+ *       has changed (e.g. inventory nearly full, bot is lost, etc.).
+ *       <p><b>Stance guard:</b> when the bot is in STAY or FOLLOW mode the
+ *       drift check skips idle-replan injection and autonomous goal enqueuing
+ *       so the StanceController's movement loop is never interrupted.</p></li>
  * </ol>
  *
  * <p>Both intervals are configurable via system properties:
@@ -33,14 +37,9 @@ public class AutonomousScheduler {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("autonomous-scheduler");
 
-    // Default intervals
     private static final int DEFAULT_REPLAN_MIN    = 5;
     private static final int DEFAULT_DRIFT_SEC     = 30;
-
-    // How many consecutive drift checks of an idle queue before forcing a replan
     private static final int IDLE_REPLAN_THRESHOLD = 3;
-
-    // -------------------------------------------------------------------------
 
     private final AutonomousGoalEngine engine;
     private final String botName;
@@ -51,17 +50,13 @@ public class AutonomousScheduler {
     private ScheduledFuture<?> replanJob;
     private ScheduledFuture<?> driftJob;
 
-    /** Consecutive drift-check cycles where the queue has been empty. */
     private int idleCycles = 0;
-
-    // -------------------------------------------------------------------------
 
     public AutonomousScheduler(AutonomousGoalEngine engine, String botName) {
         this.engine  = engine;
         this.botName = botName;
     }
 
-    /** Start both scheduled jobs. */
     public void start() {
         int replanMin = readIntProp("aiplayer.autonomous.replanIntervalMin", DEFAULT_REPLAN_MIN);
         int driftSec  = readIntProp("aiplayer.autonomous.driftCheckIntervalSec", DEFAULT_DRIFT_SEC);
@@ -76,7 +71,6 @@ public class AutonomousScheduler {
                 this::driftCheckJob, driftSec, driftSec, TimeUnit.SECONDS);
     }
 
-    /** Cancel both jobs and shut down the executor. */
     public void shutdown() {
         if (replanJob != null) replanJob.cancel(false);
         if (driftJob  != null) driftJob.cancel(false);
@@ -93,6 +87,14 @@ public class AutonomousScheduler {
             LOGGER.debug("[scheduler] Replan skipped — player is controlling the bot");
             return;
         }
+
+        // Do not disrupt an active STAY or FOLLOW stance.
+        if (BotStance.hasActiveStance(botName)) {
+            LOGGER.debug("[scheduler] Replan skipped — bot '{}' has an active stance ({})",
+                    botName, BotStance.getStance(botName).mode());
+            return;
+        }
+
         LOGGER.info("[scheduler] Scheduled replan firing for bot '{}'", botName);
         engine.triggerReplan();
         idleCycles = 0;
@@ -101,8 +103,14 @@ public class AutonomousScheduler {
     private void driftCheckJob() {
         if (engine.isPlayerControlled()) return;
 
-        // If queue has been empty for IDLE_REPLAN_THRESHOLD consecutive checks,
-        // trigger an early replan rather than waiting for the full interval.
+        // When a stance is active the StanceController owns movement.
+        // Skip all autonomous goal injection to avoid fighting the stance loop.
+        if (BotStance.hasActiveStance(botName)) {
+            LOGGER.debug("[scheduler] Drift check skipped — bot '{}' has active stance ({})",
+                    botName, BotStance.getStance(botName).mode());
+            return;
+        }
+
         if (engine.queueSize() == 0) {
             idleCycles++;
             LOGGER.debug("[scheduler] Queue empty — idle cycles: {}/{}",
@@ -116,7 +124,6 @@ public class AutonomousScheduler {
         }
         idleCycles = 0;
 
-        // State drift checks — inject priority goals for notable conditions
         try {
             ServerPlayerEntity bot = AIPlayer.serverInstance != null
                     ? AIPlayer.serverInstance.getPlayerManager().getPlayer(botName)
@@ -124,7 +131,6 @@ public class AutonomousScheduler {
 
             if (bot == null) return;
 
-            // Inventory nearly full → prompt the bot to organise/drop items
             int usedSlots = 0;
             for (int i = 0; i < bot.getInventory().size(); i++) {
                 if (!bot.getInventory().getStack(i).isEmpty()) usedSlots++;
@@ -134,8 +140,6 @@ public class AutonomousScheduler {
                 engine.injectUrgentGoal("organise inventory and drop excess items");
             }
 
-            // Very low hunger — prompt eating (RL handles survival, but this
-            // handles the slower 'go find food' planning layer)
             if (bot.getHungerManager().getFoodLevel() <= 4) {
                 LOGGER.info("[scheduler] Hunger critical — injecting eat/gather food goal");
                 engine.injectUrgentGoal("gather and eat food");
