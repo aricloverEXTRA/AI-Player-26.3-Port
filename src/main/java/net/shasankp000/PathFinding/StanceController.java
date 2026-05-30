@@ -108,7 +108,6 @@ public class StanceController {
     private static void tickStay(MinecraftServer server, ServerPlayerEntity bot,
                                   String botName, BotStance.StanceState stance) {
         if (PathTracer.BotSegmentManager.getBotMovementStatus()) {
-            // A path is already running — let it finish, then re-evaluate.
             return;
         }
 
@@ -118,14 +117,13 @@ public class StanceController {
         BlockPos current = bot.getBlockPos();
         double dist = Math.sqrt(current.getSquaredDistance(anchor));
 
-        if (dist <= STAY_TRIGGER_DISTANCE) return; // close enough
+        if (dist <= STAY_TRIGGER_DISTANCE) return;
 
-        LOGGER.info("[StanceController] STAY correction for '{}': dist={:.2f} → pathing to anchor {}",
-                botName, dist, anchor);
+        LOGGER.info("[StanceController] STAY correction for '{}': dist={} → pathing to anchor {}",
+                botName, String.format("%.2f", dist), anchor);
 
         ServerCommandSource botSource = bot.getCommandSource().withSilent().withMaxLevel(4);
 
-        // Run GoTo on a virtual thread so we don't block the scheduler.
         Thread.ofVirtual().name("stance-stay-" + botName).start(() -> {
             try {
                 GoTo.goTo(botSource, anchor.getX(), anchor.getY(), anchor.getZ(), false);
@@ -142,7 +140,6 @@ public class StanceController {
     private static void tickFollow(MinecraftServer server, ServerPlayerEntity bot,
                                     String botName, BotStance.StanceState stance) {
         if (PathTracer.BotSegmentManager.getBotMovementStatus()) {
-            // Current path still executing — wait.
             return;
         }
 
@@ -159,19 +156,16 @@ public class StanceController {
         BlockPos targetPos = target.getBlockPos();
         double distToTarget = Math.sqrt(botPos.getSquaredDistance(targetPos));
 
-        // Already close — nothing to do.
         if (distToTarget <= FOLLOW_TRIGGER_DISTANCE) return;
 
-        // Check if the target has moved far enough from our last path origin
-        // to justify re-planning (avoids thrash when both are moving slowly).
         BlockPos lastOrigin = lastFollowPathOrigin.get(botName);
         if (lastOrigin != null) {
             double originToTarget = Math.sqrt(lastOrigin.getSquaredDistance(targetPos));
             if (originToTarget < FOLLOW_TRIGGER_DISTANCE) return;
         }
 
-        LOGGER.info("[StanceController] FOLLOW path for '{}' → target '{}' at {} (dist={:.2f})",
-                botName, targetName, targetPos, distToTarget);
+        LOGGER.info("[StanceController] FOLLOW path for '{}' → target '{}' at {} (dist={})",
+                botName, targetName, targetPos, String.format("%.2f", distToTarget));
 
         lastFollowPathOrigin.put(botName, targetPos);
 
