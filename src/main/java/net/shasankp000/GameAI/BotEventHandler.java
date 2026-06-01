@@ -25,6 +25,8 @@ import net.shasankp000.PlayerUtils.*;
 import net.shasankp000.WorldUitls.GetTime;
 import net.shasankp000.Entity.EntityDetails;
 import net.shasankp000.WorldUitls.isBlockItem;
+import net.shasankp000.GameAI.mood.MoodEngine;
+import net.shasankp000.GameAI.persona.PersonaRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -86,11 +88,32 @@ public class BotEventHandler {
 
     }
 
+    // ── Mood / Persona lifecycle ──────────────────────────────────────────────
+
+    /**
+     * Called when a bot despawns (death, /bot despawn, server stop).
+     * Cleans up per-bot MoodEngine and PersonaRegistry entries so stale
+     * state does not bleed into the next spawn.
+     */
+    public static void onBotDespawn(String botName) {
+        MoodEngine.evict(botName);
+        PersonaRegistry.evict(botName);
+        LOGGER.info("[mood/persona] Evicted state for bot '{}'", botName);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+
     /**
      * Handle bot death - learn from the sequence of actions that led to death
      */
     public static void handleBotDeath(QTable qTable, RLAgent rlAgent) {
         LOGGER.info("💀 Bot died - analyzing death sequence for learning...");
+
+        // Evict mood/persona state on death so the next spawn starts fresh
+        if (bot != null) {
+            onBotDespawn(bot.getName().getString());
+        }
+
         executor.submit(() -> {
             try {
                 LookaheadLearning.learnFromDeath(transitionHistory, qTable, rlAgent);
@@ -506,6 +529,12 @@ public class BotEventHandler {
 
 
         } finally {
+            // ── Mood decay: one tick per RL loop iteration ────────────────────────
+            if (bot != null) {
+                MoodEngine.decayTick(bot.getName().getString());
+            }
+            // ─────────────────────────────────────────────────────────────────────
+
             // ⏸ Wait for any ongoing action to complete before next RL loop iteration
             String botName = bot.getName().getString();
             if (isActionInProgress(botName)) {
@@ -612,6 +641,12 @@ public class BotEventHandler {
 
             }
         } finally {
+            // ── Mood decay: one tick per RL loop iteration ────────────────────────
+            if (bot != null) {
+                MoodEngine.decayTick(bot.getName().getString());
+            }
+            // ─────────────────────────────────────────────────────────────────────
+
             synchronized (monitorLock) {
                 System.out.println("Resetting handler trigger flag.");
                 isExecuting = false;
@@ -1599,166 +1634,67 @@ public class BotEventHandler {
     }
 
     /**
-     * Provides a human-readable explanation for why a target was selected.
+     * Returns a human-readable reason for why a target was selected.
      */
     private static String getTargetSelectionReason(Entity entity, double distance) {
-        // Hostile players
-        if (entity instanceof net.minecraft.entity.player.PlayerEntity player) {
-            StringBuilder reason = new StringBuilder("⚔ Hostile player");
-
-            // Check equipment
-            net.minecraft.item.ItemStack mainHand = player.getMainHandStack();
-            if (mainHand.getItem() instanceof net.minecraft.item.BowItem ||
-                mainHand.getItem() instanceof net.minecraft.item.CrossbowItem) {
-                reason.append(" with ranged weapon");
-            } else if (mainHand.getItem() instanceof net.minecraft.item.SwordItem) {
-                reason.append(" with sword");
-            } else if (mainHand.getItem() instanceof net.minecraft.item.AxeItem) {
-                reason.append(" with axe");
-            }
-
-            // Check armor
-            int armorCount = 0;
-            for (net.minecraft.item.ItemStack armorSlot : player.getArmorItems()) {
-                if (!armorSlot.isEmpty()) armorCount++;
-            }
-            if (armorCount >= 3) {
-                reason.append(" (well-armored)");
-            }
-
-            if (distance < 4.0) {
-                reason.append(" - IMMEDIATE DANGER");
-            }
-
-            return reason.toString();
-        }
-
-        String entityType = entity.getName().getString().toLowerCase();
-
-        // Explosive threats
-        if (entityType.contains("creeper")) {
-            return "Explosive threat - must eliminate immediately!";
-        }
-
-        // Ranged threats
-        if (entityType.contains("skeleton") || entityType.contains("witch") ||
-            entityType.contains("blaze") || entityType.contains("ghast")) {
-            return "Ranged attacker - dangerous at distance";
-        }
-
-        // Flying threats
-        if (entityType.contains("phantom")) {
-            return "Aerial threat - difficult to evade";
-        }
-
-        // Maximum danger mobs
-        if (entityType.contains("warden") || entityType.contains("ravager")) {
-            return "Extremely dangerous - maximum threat";
-        }
-
-        // Close proximity
-        if (distance < 3.0) {
-            return "Immediate danger - very close proximity";
-        } else if (distance < 6.0) {
-            return "Close range threat";
-        }
-
-        // Default
-        return "Highest calculated threat";
+        String name = entity.getName().getString().toLowerCase();
+        if (name.contains("creeper")) return "Explosive threat - highest priority";
+        if (name.contains("warden")) return "Maximum danger mob";
+        if (name.contains("skeleton") || name.contains("stray")) return "Ranged attacker";
+        if (name.contains("witch")) return "Potion thrower - high threat";
+        if (entity instanceof net.minecraft.entity.player.PlayerEntity) return "Hostile player detected";
+        if (distance < 3.0) return "Critical range - immediate threat";
+        return "Closest/highest threat in range";
     }
 
-    /**
-     * Checks if an action is currently in progress for a bot
-     */
+    // ==================== ACTION TRACKING HELPERS ====================
+
     public static boolean isActionInProgress(String botName) {
         Boolean inProgress = actionInProgress.get(botName);
-        if (inProgress == null) return false;
+        if (inProgress == null || !inProgress) return false;
 
         // Check for timeout
         Long startTime = actionStartTime.get(botName);
-        if (startTime != null && (System.currentTimeMillis() - startTime) > ACTION_TIMEOUT_MS) {
-            LOGGER.warn("[ACTION-BLOCKING] Action '{}' for bot {} timed out after {}ms - clearing",
-                currentAction.get(botName), botName, ACTION_TIMEOUT_MS);
-            clearAction(botName);
+        if (startTime != null && System.currentTimeMillis() - startTime > ACTION_TIMEOUT_MS) {
+            LOGGER.warn("[ACTION] Action '{}' timed out after {}ms - forcing completion",
+                currentAction.get(botName), ACTION_TIMEOUT_MS);
+            completeAction(botName);
             return false;
-        }
-
-        return inProgress;
-    }
-
-    /**
-     * Marks an action as started
-     */
-    public static void startAction(String botName, String action) {
-        actionInProgress.put(botName, true);
-        currentAction.put(botName, action);
-        actionStartTime.put(botName, System.currentTimeMillis());
-        LOGGER.info("[ACTION-BLOCKING] ⏳ Started action: {} for bot {}", action, botName);
-    }
-
-    /**
-     * Marks an action as completed
-     */
-    public static void completeAction(String botName) {
-        String action = currentAction.get(botName);
-        long duration = System.currentTimeMillis() - actionStartTime.getOrDefault(botName, System.currentTimeMillis());
-        LOGGER.info("[ACTION-BLOCKING] ✅ Completed action: {} for bot {} (took {}ms)", action, botName, duration);
-        clearAction(botName);
-    }
-
-    /**
-     * Clears action tracking
-     */
-    public static void clearAction(String botName) {
-        actionInProgress.remove(botName);
-        currentAction.remove(botName);
-        actionStartTime.remove(botName);
-    }
-
-    /**
-     * Waits for current action to complete before allowing next action
-     * @return true if we can proceed, false if timed out waiting
-     */
-    public static boolean waitForActionCompletion(String botName, long maxWaitMs) {
-        long startWait = System.currentTimeMillis();
-        while (isActionInProgress(botName)) {
-            if (System.currentTimeMillis() - startWait > maxWaitMs) {
-                LOGGER.warn("[ACTION-BLOCKING] ⏱ Timeout waiting for action to complete for bot {}", botName);
-                clearAction(botName);
-                return false;
-            }
-            try {
-                Thread.sleep(100); // Check every 100ms
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                return false;
-            }
         }
         return true;
     }
 
-    /**
-     * Get the transition history for external systems (e.g., planner)
-     */
-    public static StateTransition.TransitionHistory getTransitionHistory() {
-        return transitionHistory;
+    public static void startAction(String botName, String actionName) {
+        actionInProgress.put(botName, true);
+        currentAction.put(botName, actionName);
+        actionStartTime.put(botName, System.currentTimeMillis());
+        LOGGER.debug("[ACTION] Started: {}", actionName);
     }
 
-
-    /**
-     * Get the RLAgent instance for the given bot
-     * This creates a new RLAgent with the current state
-     */
-    public static RLAgent getRLAgent(ServerPlayerEntity bot) {
-        return new RLAgent(); // gives a new hook into the RL agent system to get the current state and access Qtable
-    }
-
-    public static State getCurrentState(ServerPlayerEntity bot) {
-        if (currentState == null) {
-            currentState = createInitialState(bot);  // ✅ Use the existing method
+    public static void completeAction(String botName) {
+        actionInProgress.put(botName, false);
+        String completedAction = currentAction.get(botName);
+        currentAction.remove(botName);
+        actionStartTime.remove(botName);
+        if (completedAction != null) {
+            LOGGER.debug("[ACTION] Completed: {}", completedAction);
         }
-        return currentState;
     }
 
+    public static void waitForActionCompletion(String botName, long timeoutMs) {
+        long start = System.currentTimeMillis();
+        while (isActionInProgress(botName)) {
+            if (System.currentTimeMillis() - start > timeoutMs) {
+                LOGGER.warn("[ACTION] waitForActionCompletion timed out after {}ms", timeoutMs);
+                completeAction(botName);
+                break;
+            }
+            try {
+                Thread.sleep(50);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                break;
+            }
+        }
+    }
 }
-
