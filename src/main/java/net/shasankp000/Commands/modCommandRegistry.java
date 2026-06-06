@@ -45,6 +45,14 @@ import net.shasankp000.WorldUitls.isFoodItem;
 import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import net.shasankp000.GameAI.handoff.TradeEvaluator;
+import net.shasankp000.GameAI.handoff.TradeListener;
+import net.shasankp000.GameAI.mood.AffectiveState;
+import net.shasankp000.GameAI.mood.MoodEngine;
+import net.shasankp000.GameAI.mood.MoodLabel;
+import net.shasankp000.GameAI.persona.PersonaRegistry;
+import net.shasankp000.GameAI.persona.PersonaTemplate;
+import java.util.stream.Collectors;
 
 import java.util.*;
 import java.util.concurrent.Executors;
@@ -135,24 +143,15 @@ public class modCommandRegistry {
                                         )
                                 )
                         )
-                        // ----------------------------------------------------------------
-                        // /bot stance <bot> <stay|follow|cancel> [targetPlayerName]
-                        //
-                        // stay   — bot holds its current position; auto-corrects if pushed
-                        // follow — bot shadows <targetPlayerName>; re-paths when they move
-                        // cancel — removes any active stance and stops ongoing path
-                        // ----------------------------------------------------------------
                         .then(literal("stance")
                                 .then(CommandManager.argument("bot", EntityArgumentType.player())
                                         .then(CommandManager.argument("mode", StringArgumentType.string())
-                                                // variant with optional target player name (for follow)
                                                 .then(CommandManager.argument("target", StringArgumentType.string())
                                                         .executes(context -> {
                                                             botStance(context, true);
                                                             return 1;
                                                         })
                                                 )
-                                                // variant without target (stay / cancel)
                                                 .executes(context -> {
                                                     botStance(context, false);
                                                     return 1;
@@ -305,7 +304,6 @@ public class modCommandRegistry {
                                                     assert server != null;
                                                     ServerCommandSource botSource = bot.getCommandSource().withSilent().withMaxLevel(4);
 
-                                                    // Check if bot can shoot (checks entire inventory now, not just equipped)
                                                     if (!RangedWeaponUtils.hasBowOrCrossbow(bot)) {
                                                         LOGGER.info("Bot does not have a bow or crossbow to shoot with.");
                                                         if (debugMode.equals("true")) {
@@ -314,7 +312,6 @@ public class modCommandRegistry {
                                                         return 0;
                                                     }
 
-                                                    // Prepare ammo first (move items to correct slots if needed)
                                                     String ammoType;
                                                     if (RangedWeaponUtils.hasCrossbow(bot)) {
                                                         ammoType = RangedWeaponUtils.prepareCrossbowAmmo(bot, server, botSource);
@@ -334,15 +331,12 @@ public class modCommandRegistry {
                                                         return 0;
                                                     }
 
-                                                    // Detect nearby hostile entities AND hostile players within 40 blocks
                                                     List<Entity> nearbyEntities = AutoFaceEntity.detectNearbyEntities(bot, 40);
                                                     List<Entity> hostileEntities = nearbyEntities.stream()
                                                             .filter(entity -> {
-                                                                // Include hostile mobs
                                                                 if (entity instanceof HostileEntity) {
                                                                     return true;
                                                                 }
-                                                                // Include hostile players (tracked by retaliation system)
                                                                 if (entity instanceof net.minecraft.entity.player.PlayerEntity player &&
                                                                     !player.getUuid().equals(bot.getUuid())) {
                                                                     return net.shasankp000.PlayerUtils.PlayerRetaliationTracker.isPlayerHostile(bot, player);
@@ -359,7 +353,6 @@ public class modCommandRegistry {
                                                         return 0;
                                                     }
 
-                                                    // Intelligent targeting: use risk analysis to prioritize threats
                                                     Entity target = selectHighestThreatTarget(bot, hostileEntities, debugMode.equals("true"), botSource);
 
                                                     if (target == null) {
@@ -374,11 +367,9 @@ public class modCommandRegistry {
                                                         ChatUtils.sendChatMessages(botSource, "Target acquired: " + targetName + " at " + String.format("%.1f", distance) + " blocks");
                                                     }
 
-                                                    // Pause autoface to prevent interruption
                                                     AutoFaceEntity.isShooting = true;
                                                     LOGGER.info("Paused autoface for shooting");
 
-                                                    // Switch to bow/crossbow if not already equipped
                                                     int weaponSlot = RangedWeaponUtils.getBowOrCrossbowSlot(bot);
                                                     if (weaponSlot != -1 && bot.getInventory().selectedSlot != (weaponSlot - 1)) {
                                                         server.getCommandManager().executeWithPrefix(botSource, "/player " + bot.getName().getString() + " hotbar " + weaponSlot);
@@ -522,11 +513,11 @@ public class modCommandRegistry {
                                                             .thenAccept(success -> {
                                                                 server.execute(() -> {
                                                                     if (success) {
-                                                                        ChatUtils.sendChatMessages(botSource, "✓ Plan executed successfully!");
-                                                                        LOGGER.info("[planner] ✓ Goal '{}' completed", goal);
+                                                                        ChatUtils.sendChatMessages(botSource, "\u2713 Plan executed successfully!");
+                                                                        LOGGER.info("[planner] \u2713 Goal '{}' completed", goal);
                                                                     } else {
-                                                                        ChatUtils.sendChatMessages(botSource, "✗ Plan execution failed");
-                                                                        LOGGER.warn("[planner] ✗ Goal '{}' failed", goal);
+                                                                        ChatUtils.sendChatMessages(botSource, "\u2717 Plan execution failed");
+                                                                        LOGGER.warn("[planner] \u2717 Goal '{}' failed", goal);
                                                                     }
                                                                 });
                                                             })
@@ -892,6 +883,140 @@ public class modCommandRegistry {
                                 })
                         )
 
+                        // ── Feature 2: /bot mood ─────────────────────────────────────────────
+                        // /bot mood <bot>              ->  show current mood snapshot
+                        // /bot mood <bot> <mood_label> ->  override dominant mood
+                        .then(literal("mood")
+                                .then(CommandManager.argument("bot", EntityArgumentType.player())
+                                        .executes(context -> {
+                                            ServerPlayerEntity bot = EntityArgumentType.getPlayer(context, "bot");
+                                            String snapshot = MoodEngine.getStatusSnapshot(bot.getName().getString());
+                                            ChatUtils.sendSystemMessage(context.getSource(),
+                                                    "[" + bot.getName().getString() + "] mood: " + snapshot);
+                                            return 1;
+                                        })
+                                        .then(CommandManager.argument("mood_label", StringArgumentType.string())
+                                                .executes(context -> {
+                                                    ServerPlayerEntity bot = EntityArgumentType.getPlayer(context, "bot");
+                                                    String botName  = bot.getName().getString();
+                                                    String labelStr = StringArgumentType.getString(context, "mood_label").toUpperCase();
+                                                    MoodLabel label;
+                                                    try {
+                                                        label = MoodLabel.valueOf(labelStr);
+                                                    } catch (IllegalArgumentException e) {
+                                                        String valid = Arrays.stream(MoodLabel.values())
+                                                                .map(Enum::name)
+                                                                .collect(Collectors.joining(", "));
+                                                        ChatUtils.sendSystemMessage(context.getSource(),
+                                                                "Unknown mood label. Valid: " + valid);
+                                                        return 0;
+                                                    }
+                                                    float valence = switch (label) {
+                                                        case ELATED, CONTENT, SERENE -> 0.8f;
+                                                        case EXCITED, CALM, NEUTRAL  -> 0.0f;
+                                                        case AGITATED, BORED, DEPRESSED -> -0.8f;
+                                                    };
+                                                    float arousal = switch (label) {
+                                                        case ELATED, EXCITED, AGITATED -> 0.9f;
+                                                        case CONTENT, NEUTRAL, BORED   -> 0.5f;
+                                                        case SERENE, CALM, DEPRESSED   -> 0.1f;
+                                                    };
+                                                    MoodEngine.set(botName, new AffectiveState(valence, arousal));
+                                                    ChatUtils.sendSystemMessage(context.getSource(),
+                                                            "[" + botName + "] mood set to: " + label.name());
+                                                    return 1;
+                                                })
+                                        )
+                                )
+                        )
+
+                        // ── Feature 3: /bot persona ──────────────────────────────────────────
+                        // /bot persona <bot>              ->  list available personas + show active
+                        // /bot persona <bot> <persona_id> ->  set persona
+                        .then(literal("persona")
+                                .then(CommandManager.argument("bot", EntityArgumentType.player())
+                                        .executes(context -> {
+                                            ServerPlayerEntity bot = EntityArgumentType.getPlayer(context, "bot");
+                                            String botName = bot.getName().getString();
+                                            String all = PersonaRegistry.ids().stream()
+                                                    .collect(Collectors.joining(", "));
+                                            ChatUtils.sendSystemMessage(context.getSource(),
+                                                    "[" + botName + "] available personas: " + all);
+                                            return 1;
+                                        })
+                                        .then(CommandManager.argument("persona_id", StringArgumentType.string())
+                                                .executes(context -> {
+                                                    ServerPlayerEntity bot = EntityArgumentType.getPlayer(context, "bot");
+                                                    String botName   = bot.getName().getString();
+                                                    String personaId = StringArgumentType.getString(context, "persona_id");
+                                                    Optional<PersonaTemplate> opt = PersonaRegistry.get(personaId);
+                                                    if (opt.isEmpty()) {
+                                                        String all = PersonaRegistry.ids().stream()
+                                                                .collect(Collectors.joining(", "));
+                                                        ChatUtils.sendSystemMessage(context.getSource(),
+                                                                "Unknown persona id. Valid: " + all);
+                                                        return 0;
+                                                    }
+                                                    PersonaTemplate template = opt.get();
+                                                    PersonaRegistry.setActive(botName, personaId);
+                                                    ChatUtils.sendSystemMessage(context.getSource(),
+                                                            "[" + botName + "] persona set to: "
+                                                            + template.displayName());
+                                                    return 1;
+                                                })
+                                        )
+                                )
+                        )
+
+                        // ── Feature 4: /bot trade ────────────────────────────────────────────
+                        // /bot trade <bot>         ->  bot announces what it can offer
+                        // /bot trade <bot> cancel  ->  cancel the caller's pending session
+                        .then(literal("trade")
+                                .then(CommandManager.argument("bot", EntityArgumentType.player())
+                                        .executes(context -> {
+                                            ServerPlayerEntity bot = EntityArgumentType.getPlayer(context, "bot");
+                                            ServerCommandSource src = context.getSource();
+                                            ServerPlayerEntity player;
+                                            try {
+                                                player = src.getPlayerOrThrow();
+                                            } catch (CommandSyntaxException e) {
+                                                ChatUtils.sendSystemMessage(src, "This command must be run by a player.");
+                                                return 0;
+                                            }
+                                            ItemStack botOffer = TradeEvaluator.evaluate(ItemStack.EMPTY, bot);
+                                            if (botOffer.isEmpty()) {
+                                                player.sendMessage(
+                                                        Text.literal("\u00a7e[" + bot.getName().getString()
+                                                                + "] \u00a7fI have nothing worth trading right now."),
+                                                        false);
+                                                return 0;
+                                            }
+                                            player.sendMessage(
+                                                    Text.literal("\u00a7e[" + bot.getName().getString()
+                                                            + "] \u00a7fI could offer: \u00a7b"
+                                                            + TradeEvaluator.displayName(botOffer)
+                                                            + "\u00a7f. Sneak and throw the item you want to give me!"),
+                                                    false);
+                                            return 1;
+                                        })
+                                        .then(literal("cancel")
+                                                .executes(context -> {
+                                                    ServerCommandSource src = context.getSource();
+                                                    ServerPlayerEntity player;
+                                                    try {
+                                                        player = src.getPlayerOrThrow();
+                                                    } catch (CommandSyntaxException e) {
+                                                        ChatUtils.sendSystemMessage(src, "Must be run by a player.");
+                                                        return 0;
+                                                    }
+                                                    TradeListener.cancelSession(player.getUuid());
+                                                    ChatUtils.sendSystemMessage(src, "Trade session cancelled.");
+                                                    return 1;
+                                                })
+                                        )
+                                )
+                        )
+
                         .then(literal("stopAllMovementTasks")
                                 .executes(context -> {
 
@@ -913,22 +1038,6 @@ public class modCommandRegistry {
     // /bot stance handler
     // =========================================================================
 
-    /**
-     * Handles /bot stance <bot> <mode> [target].
-     *
-     * <p>Modes:
-     * <ul>
-     *   <li><b>stay</b>   — records the bot's current block position as anchor.
-     *       StanceController will re-path back whenever drift > 2.5 blocks.</li>
-     *   <li><b>follow</b> — requires a {@code target} player name argument.
-     *       StanceController will re-path toward the target whenever they
-     *       move > 5 blocks from the last path origin.</li>
-     *   <li><b>cancel</b> — clears the stance, flushes in-flight movement.</li>
-     * </ul>
-     *
-     * @param context   the command context
-     * @param hasTarget true when the optional {@code target} argument was supplied
-     */
     private static void botStance(CommandContext<ServerCommandSource> context, boolean hasTarget) {
         ServerPlayerEntity bot;
         try {
@@ -958,7 +1067,6 @@ public class modCommandRegistry {
                     return;
                 }
                 String target = StringArgumentType.getString(context, "target");
-                // Validate target exists on the server
                 MinecraftServer server = cmdSource.getServer();
                 if (server.getPlayerManager().getPlayer(target) == null) {
                     ChatUtils.sendSystemMessage(cmdSource,
@@ -1455,9 +1563,6 @@ public class modCommandRegistry {
         return new BlockPos((int) player.getX() + 5, (int) player.getY(), (int) player.getZ());
     }
 
-    /**
-     * Intelligently selects the highest threat target from a list of hostile entities.
-     */
     private static Entity selectHighestThreatTarget(ServerPlayerEntity bot, List<Entity> hostileEntities, boolean debugMode, ServerCommandSource botSource) {
         if (hostileEntities.isEmpty()) {
             return null;
