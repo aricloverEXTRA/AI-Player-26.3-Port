@@ -29,13 +29,15 @@ import java.util.concurrent.atomic.AtomicBoolean;
  *   <li>Pop goals one at a time and dispatch them via {@link GoalMapper} +
  *       {@link HybridPlanner}.</li>
  *   <li>Accept priority goal injections from {@link WorldEventListener} via
- *       {@link #injectUrgentGoal(String)}.</li>
+ *       {@link #injectUrgentGoal(String)} or from the companion system via
+ *       {@link #injectGoalWithPriority(String, int)}.</li>
  *   <li>Pause autonomous execution while a human player is directly addressing
  *       the bot ({@link #setPlayerControlled(boolean)}).</li>
  * </ol>
  *
  * <p>The goal queue is a {@link PriorityBlockingQueue} so urgent world-event
  * goals (priority=10) always surface before normal LLM plan goals (priority=0).
+ * Companion FOLLOW goals use priority 15 and STAY return goals use priority 20.
  * Maximum depth is capped at {@value #MAX_QUEUE_DEPTH} to prevent runaway
  * re-plans from stacking up.
  */
@@ -116,6 +118,24 @@ public class AutonomousGoalEngine {
      */
     public void injectPlayerGoal(String goalText) {
         enqueue(new GoalQueueEntry(goalText, 5, GoalQueueEntry.Source.PLAYER));
+    }
+
+    /**
+     * Inject a goal with an explicit priority value.
+     *
+     * <p>Used by the companion system:
+     * <ul>
+     *   <li>FOLLOW navigation goals — priority 15 (above world-events, below hard interrupts)</li>
+     *   <li>STAY return-to-anchor goals — priority 20</li>
+     * </ul>
+     *
+     * Silently dropped if the queue is already at max depth.
+     *
+     * @param goalText Human-readable goal string forwarded to {@link GoalMapper}.
+     * @param priority Numeric priority; higher values dequeue first.
+     */
+    public void injectGoalWithPriority(String goalText, int priority) {
+        enqueue(new GoalQueueEntry(goalText, priority, GoalQueueEntry.Source.PLAYER));
     }
 
     /**
@@ -357,7 +377,6 @@ public class AutonomousGoalEngine {
     }
 
     private LLMClient buildClient(String provider) {
-        // player2 needs special handling — use null for now if not wired
         if (provider.equals("player2")) {
             LOGGER.warn("[autonomous] Player2 provider not supported in autonomous mode (no chatCallback available here)");
             return null;
