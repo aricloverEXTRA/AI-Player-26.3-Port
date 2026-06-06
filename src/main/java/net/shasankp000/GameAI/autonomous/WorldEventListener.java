@@ -1,5 +1,7 @@
 package net.shasankp000.GameAI.autonomous;
 
+import net.shasankp000.GameAI.companion.BotStance;
+import net.shasankp000.GameAI.companion.CompanionController;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -14,13 +16,17 @@ import java.util.regex.Pattern;
  * <p>This class is purely a <em>social</em> reactor — it never injects
  * survival or motor goals.  Those remain the responsibility of the RL system.
  *
+ * <p>Additionally, it parses <em>stance trigger phrases</em> from player
+ * chat directed at the bot (e.g. {@code "follow me"}, {@code "stay here"})
+ * and delegates stance changes to {@link CompanionController}.
+ *
  * <h3>Usage</h3>
  * Call {@link #process(String)} from {@code BotEventHandler} every time a
  * raw chat/system message arrives from the server.  If the message matches a
  * known pattern the listener injects an appropriate conversational goal via
  * {@link AutonomousGoalEngine#injectUrgentGoal(String)}.
  *
- * <h3>Pattern table</h3>
+ * <h3>Pattern table (social)</h3>
  * <pre>
  * Server message pattern                      → Injected goal
  * ─────────────────────────────────────────────────────────────────────────
@@ -31,6 +37,13 @@ import java.util.regex.Pattern;
  * &lt;player&gt; found [diamond/netherite/...item] → react to &lt;player&gt; finding [item] in chat
  * &lt;player&gt; entered the Nether               → wish &lt;player&gt; luck in the Nether in chat
  * &lt;player&gt; has reached the goal [X]         → cheer on &lt;player&gt; in chat
+ * </pre>
+ *
+ * <h3>Stance trigger phrases (chat-driven)</h3>
+ * <pre>
+ * "follow me" / "follow &lt;player&gt;"  → FOLLOW stance
+ * "stay here" / "stop moving"      → STAY stance
+ * "wander" / "go explore" / ...    → WANDER stance
  * </pre>
  */
 public class WorldEventListener {
@@ -107,6 +120,55 @@ public class WorldEventListener {
     );
 
     // -------------------------------------------------------------------------
+    // Stance trigger patterns  (Feature 1.6)
+    // -------------------------------------------------------------------------
+
+    /**
+     * A stance trigger record pairs a compiled pattern with the {@link BotStance}
+     * it maps to.  The first capture group (if present) is the target player name
+     * for {@code FOLLOW} — used to record who to follow in
+     * {@link CompanionController}.
+     */
+    private record StanceTrigger(Pattern pattern, BotStance stance) {}
+
+    /**
+     * Ordered list of stance trigger patterns.
+     *
+     * <p>Chat lines are stripped of the leading {@code <sender>} before matching,
+     * so these patterns match only the <em>message body</em> (lower-cased).
+     *
+     * <p>Each pattern is tried in order; the first match wins.
+     */
+    private static final List<StanceTrigger> STANCE_TRIGGERS = List.of(
+
+        // "follow me"  — follow the message sender (resolved by applyStanceTrigger)
+        new StanceTrigger(
+            Pattern.compile("\\bfollow\\s+me\\b", Pattern.CASE_INSENSITIVE),
+            BotStance.FOLLOW
+        ),
+
+        // "follow <player>"  — follow a named player
+        new StanceTrigger(
+            Pattern.compile("\\bfollow\\s+(\\S+)", Pattern.CASE_INSENSITIVE),
+            BotStance.FOLLOW
+        ),
+
+        // "stay here" / "stop moving" / "stay put" / "don't move"
+        new StanceTrigger(
+            Pattern.compile("\\b(stay\\s+here|stop\\s+moving|stay\\s+put|don'?t\\s+move)\\b",
+                            Pattern.CASE_INSENSITIVE),
+            BotStance.STAY
+        ),
+
+        // "wander" / "go explore" / "do your thing" / "roam around" / "be free"
+        new StanceTrigger(
+            Pattern.compile("\\b(wander|go\\s+explore|do\\s+your\\s+thing|roam\\s+around|be\\s+free)\\b",
+                            Pattern.CASE_INSENSITIVE),
+            BotStance.WANDER
+        )
+    );
+
+    // -------------------------------------------------------------------------
     // Instance
     // -------------------------------------------------------------------------
 
@@ -133,7 +195,7 @@ public class WorldEventListener {
     public void process(String rawMessage) {
         if (rawMessage == null || rawMessage.isBlank()) return;
 
-        // Strip leading brackets (e.g. "[Server] ", colour codes, etc.)
+        // Strip colour codes and [Server] prefix
         String stripped = rawMessage
                 .replaceAll("\u00a7.", "")           // strip Minecraft colour codes
                 .replaceAll("^\\[Server]\\s*", "")    // strip [Server] prefix
@@ -144,6 +206,19 @@ public class WorldEventListener {
             return;
         }
 
+        // ── 1. Stance trigger check (chat-driven, Feature 1.6) ────────────────
+        // Vanilla chat format: "<PlayerName> message body"
+        Matcher chatMatcher = Pattern.compile("^<(\\S+)>\\s+(.+)$").matcher(stripped);
+        if (chatMatcher.find()) {
+            String sender      = chatMatcher.group(1);
+            String messageBody = chatMatcher.group(2);
+
+            if (applyStanceTrigger(sender, messageBody)) {
+                return; // stance handled — skip social goal injection
+            }
+        }
+
+        // ── 2. Social event goal injection ────────────────────────────────────
         for (EventPattern ep : PATTERNS) {
             Matcher m = ep.pattern().matcher(stripped);
             if (m.find()) {
@@ -153,5 +228,61 @@ public class WorldEventListener {
                 return; // one event → one goal; don't stack multiple reactions
             }
         }
+    }
+
+    // -------------------------------------------------------------------------
+    // Stance trigger helpers  (Feature 1.6)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Attempts to match {@code messageBody} against every {@link #STANCE_TRIGGERS}
+     * entry.  On a match, delegates to {@link CompanionController#setStance} and
+     * injects a brief acknowledgement goal into the goal engine.
+     *
+     * @param sender      The player who sent the chat message.
+     * @param messageBody The body of the chat message (everything after {@code <sender> }).
+     * @return {@code true} if a stance trigger was matched and applied; {@code false}
+     *         if no trigger matched and normal social processing should continue.
+     */
+    private boolean applyStanceTrigger(String sender, String messageBody) {
+        for (StanceTrigger trigger : STANCE_TRIGGERS) {
+            Matcher m = trigger.pattern().matcher(messageBody);
+            if (!m.find()) continue;
+
+            BotStance newStance = trigger.stance();
+
+            switch (newStance) {
+                case FOLLOW -> {
+                    // Determine target: explicit name in group(1), or fall back to sender
+                    String target = sender; // default: follow whoever sent the message
+                    try {
+                        String captured = m.group(1);
+                        // "me" resolves to sender; anything else is the named player
+                        if (captured != null && !captured.equalsIgnoreCase("me")) {
+                            target = captured;
+                        }
+                    } catch (IndexOutOfBoundsException ignored) {
+                        // pattern has no capture group — target stays as sender
+                    }
+                    CompanionController.setStance(botName, BotStance.FOLLOW, target);
+                    LOGGER.info("[stance] {} → FOLLOW {}", botName, target);
+                    engine.injectUrgentGoal("acknowledge that you will now follow " + target + " in chat");
+                }
+                case STAY -> {
+                    CompanionController.setStance(botName, BotStance.STAY, null);
+                    LOGGER.info("[stance] {} → STAY", botName);
+                    engine.injectUrgentGoal("acknowledge that you are staying put in chat");
+                }
+                case WANDER -> {
+                    CompanionController.setStance(botName, BotStance.WANDER, null);
+                    LOGGER.info("[stance] {} → WANDER", botName);
+                    engine.injectUrgentGoal("acknowledge that you will wander freely in chat");
+                }
+            }
+
+            return true; // trigger matched — stop processing
+        }
+
+        return false; // no stance trigger matched
     }
 }
