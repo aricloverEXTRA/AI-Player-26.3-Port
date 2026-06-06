@@ -15,6 +15,7 @@ import net.shasankp000.GameAI.BotEventHandler;
 import net.shasankp000.GameAI.RLAgent;
 import net.shasankp000.Commands.modCommandRegistry;
 import net.shasankp000.Database.QTableStorage;
+import net.shasankp000.GameAI.proximity.ProximityTracker;
 import net.shasankp000.PlayerUtils.BlockDistanceLimitedSearch;
 import net.shasankp000.PlayerUtils.blockDetectionUnit;
 import net.shasankp000.PlayerUtils.ProjectileDefenseUtils;
@@ -535,10 +536,13 @@ public class AutoFaceEntity {
                     hostileEntityInFront = false;
 
                     // Face nearby entities (players, passive mobs, etc.) - but only if bot is NOT busy with tasks
-//                    LOGGER.debug("PathTracer Movement Status: {}, isBotMoving: {}, Block Detection Status: {}, isBotExecutingTask: {}", PathTracer.BotSegmentManager.getBotMovementStatus(), isBotMoving, blockDetectionUnit.getBlockDetectionStatus(), isBotExecutingTask());
-
                     if (!((PathTracer.BotSegmentManager.getBotMovementStatus() || isBotMoving) || blockDetectionUnit.getBlockDetectionStatus() || isBotExecutingTask())) {
                         FaceClosestEntity.faceClosestEntity(bot, nearbyEntities);
+
+                        // Feature 5 — Player Proximity Awareness.
+                        // Runs in the same guard as faceClosestEntity: bot is idle, safe, not moving.
+                        // nearbyEntities already computed above — zero extra detection cost.
+                        ProximityTracker.tick(bot, nearbyEntities);
                     }
                 }
 
@@ -576,6 +580,8 @@ public class AutoFaceEntity {
         executor3.submit(() -> {
             try {
                 stopAutoFace(Bot);
+                // Feature 5 — clear all proximity state on server stop
+                ProximityTracker.clear();
             } catch (Exception e) {
                 LOGGER.error("Failed to initialize Ollama client", e);
             }
