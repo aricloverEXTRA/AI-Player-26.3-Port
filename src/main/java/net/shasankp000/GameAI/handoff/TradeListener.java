@@ -70,41 +70,24 @@ public final class TradeListener {
 
     // ── PlayerPickupItemCallback ─────────────────────────────────────────────
 
-    /**
-     * Intercepts every item pick-up event on the server side.
-     * We use the pick-up callback (not throw) because Fabric 1.21.1 does not
-     * expose a clean server-side "item thrown" event; instead we check
-     * {@link ItemEntity#getThrower()} when the bot or any entity is about to
-     * pick up a dropped item.
-     *
-     * <p>If the item was thrown by a sneaking human player near the bot,
-     * we intercept it here and handle it ourselves, returning
-     * {@link ActionResult#FAIL} to prevent normal pickup.
-     */
     private static ActionResult onPlayerPickupItem(PlayerEntity picker,
                                                    ItemEntity itemEntity) {
-        // We only care about items thrown by a human player.
         UUID throwerUuid = itemEntity.getThrower();
         if (throwerUuid == null) return ActionResult.PASS;
 
         ServerPlayerEntity bot = BotEventHandler.bot;
         if (bot == null) return ActionResult.PASS;
 
-        // Resolve the thrower to a ServerPlayerEntity.
         MinecraftServer server = bot.getServer();
         if (server == null) return ActionResult.PASS;
 
         ServerPlayerEntity thrower = server.getPlayerManager().getPlayer(throwerUuid);
         if (thrower == null) return ActionResult.PASS;
-        if (thrower.getUuid().equals(bot.getUuid())) return ActionResult.PASS; // bot threw it
+        if (thrower.getUuid().equals(bot.getUuid())) return ActionResult.PASS;
 
-        // Only react when the item lands near the bot.
         double distToBot = itemEntity.getPos().distanceTo(bot.getPos());
         if (distToBot > TRADE_RANGE) return ActionResult.PASS;
 
-        // Only react when the original thrower was sneaking at throw-time.
-        // We approximate this by checking whether the player is still sneaking;
-        // for reliability you may want to store the sneak flag on throw instead.
         if (!thrower.isSneaking()) return ActionResult.PASS;
 
         ItemStack thrown = itemEntity.getStack();
@@ -123,16 +106,15 @@ public final class TradeListener {
                 thrower.sendMessage(
                     Text.literal("§e[" + bot.getName().getString() + "] §fSorry, I have nothing fair to offer for that."),
                     false);
-                return ActionResult.PASS; // let the item sit; player can re-pick it up
+                return ActionResult.PASS;
             }
 
             TradeSession session = new TradeSession(throwerUuid, thrown, counterOffer, currentTick);
             SESSIONS.put(throwerUuid, session);
 
-            // Bot announces the deal in chat.
-            String botName  = bot.getName().getString();
-            String offName  = TradeEvaluator.displayName(thrown);
-            String ctrName  = TradeEvaluator.displayName(counterOffer);
+            String botName = bot.getName().getString();
+            String offName = TradeEvaluator.displayName(thrown);
+            String ctrName = TradeEvaluator.displayName(counterOffer);
             thrower.sendMessage(
                 Text.literal("§e[" + botName + "] §fI'll trade my §b" + ctrName
                     + "§f for your §b" + offName
@@ -142,12 +124,10 @@ public final class TradeListener {
             LOGGER.info("[trade] Session opened: {} offers {} for {}",
                 thrower.getName().getString(), offName, ctrName);
 
-            // Prevent the item from being picked up by anyone — it stays on the ground.
             return ActionResult.FAIL;
 
         } else {
             // ── Phase 2: complete the trade ──────────────────────────────────
-            // Confirm the player is delivering the promised item.
             if (thrown.getItem() != existing.offeredItem.getItem()) {
                 thrower.sendMessage(
                     Text.literal("§e[" + bot.getName().getString() + "] §fThat's not what we agreed on."),
@@ -155,7 +135,6 @@ public final class TradeListener {
                 return ActionResult.PASS;
             }
 
-            // Remove the counter-offer item from the bot's inventory.
             boolean removed = removeOneFromBotInventory(bot, existing.counterOfferItem);
             if (!removed) {
                 thrower.sendMessage(
@@ -166,11 +145,9 @@ public final class TradeListener {
                 return ActionResult.PASS;
             }
 
-            // Give the bot the offered item (add to its inventory).
             bot.getInventory().insertStack(thrown.copy());
-            itemEntity.discard(); // consume the dropped item entity
+            itemEntity.discard();
 
-            // Drop the counter-offer at the bot's feet so the player can pick it up.
             dropItemNearBot(bot, existing.counterOfferItem.copy());
 
             String botName = bot.getName().getString();
@@ -185,16 +162,12 @@ public final class TradeListener {
                 TradeEvaluator.displayName(existing.counterOfferItem));
 
             SESSIONS.remove(throwerUuid);
-            return ActionResult.FAIL; // item was consumed; block further pickup handling
+            return ActionResult.FAIL;
         }
     }
 
     // ── Helpers ──────────────────────────────────────────────────────────────
 
-    /**
-     * Removes exactly one item matching {@code template} from the bot's
-     * inventory.  Returns true on success.
-     */
     private static boolean removeOneFromBotInventory(ServerPlayerEntity bot, ItemStack template) {
         for (int slot = 0; slot < bot.getInventory().size(); slot++) {
             ItemStack stack = bot.getInventory().getStack(slot);
@@ -209,27 +182,27 @@ public final class TradeListener {
         return false;
     }
 
-    /**
-     * Drops an item at the bot's current position (offset slightly upward so
-     * it doesn't clip into the ground).
-     */
     private static void dropItemNearBot(ServerPlayerEntity bot, ItemStack stack) {
         ServerWorld world = bot.getServerWorld();
         Vec3d pos = bot.getPos().add(0, 0.5, 0);
         ItemEntity ie = new ItemEntity(world, pos.x, pos.y, pos.z, stack);
-        ie.setVelocity(0, 0.1, 0); // gentle upward toss
+        ie.setVelocity(0, 0.1, 0);
         world.spawnEntity(ie);
     }
 
-    // ── Package-level session access (for /bot trade command) ────────────────
+    // ── Public session access (for /bot trade command in modCommandRegistry) ─
 
-    /** Returns the active session for {@code playerUuid}, or null. */
-    static TradeSession getSession(UUID playerUuid) {
+    /** Returns the active session for {@code playerUuid}, or {@code null}. */
+    public static TradeSession getSession(UUID playerUuid) {
         return SESSIONS.get(playerUuid);
     }
 
-    /** Forcibly removes a session (used by /bot trade cancel). */
-    static void cancelSession(UUID playerUuid) {
+    /**
+     * Forcibly removes a session (used by {@code /bot trade cancel}).
+     * Made public so {@code modCommandRegistry} can call this from the
+     * {@code Commands} package.
+     */
+    public static void cancelSession(UUID playerUuid) {
         SESSIONS.remove(playerUuid);
     }
 }
