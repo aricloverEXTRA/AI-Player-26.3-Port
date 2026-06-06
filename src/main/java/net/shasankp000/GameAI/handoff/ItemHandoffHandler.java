@@ -1,7 +1,9 @@
 package net.shasankp000.GameAI.handoff;
 
 import net.minecraft.item.ItemStack;
+import net.minecraft.registry.Registries;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.util.Identifier;
 import net.shasankp000.GameAI.mood.MoodEngine;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -16,6 +18,9 @@ import java.util.Random;
  * <p>When a player throws an item that the bot picks up this class:
  * <ol>
  *   <li>Classifies the item into an {@link ItemTier}.</li>
+ *   <li><b>Need-aware override</b>: if the raw tier is {@link ItemTier#JUNK} but the
+ *       bot currently holds fewer than {@value #NEED_THRESHOLD} of that item, it is
+ *       reclassified to {@link ItemTier#COMMON} — the bot actually wanted it.</li>
  *   <li>Applies a valence + arousal delta to the bot's {@link MoodEngine}.</li>
  *   <li>Sends a context-aware chat reaction from the bot back to the server.</li>
  * </ol>
@@ -28,11 +33,21 @@ import java.util.Random;
  *  COMMON     Δv=+0.04  Δa=+0.02   (tiny positive tick)
  *  JUNK       Δv=-0.10  Δa=+0.05   (mild irritation / AGITATED lean)
  * </pre>
+ *
+ * <p>The JUNK impulse is only applied when the bot has {@value #NEED_THRESHOLD} or
+ * more of that item already, meaning it genuinely doesn't need it.
  */
 public final class ItemHandoffHandler {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("item-handoff");
     private static final Random RNG = new Random();
+
+    /**
+     * If the bot's inventory contains fewer than this many of a JUNK-tier item,
+     * the item is treated as COMMON (the bot actually needs it).
+     * Set to 16 — half a stack — as a reasonable "running low" threshold.
+     */
+    private static final int NEED_THRESHOLD = 16;
 
     private ItemHandoffHandler() { /* static API only */ }
 
@@ -49,8 +64,7 @@ public final class ItemHandoffHandler {
     );
 
     // -----------------------------------------------------------------------
-    // Chat reaction pools  (persona-agnostic defaults; PromptBuilder may
-    // override these in the LLM path once that is wired up)
+    // Chat reaction pools
     // -----------------------------------------------------------------------
 
     private static final Map<ItemTier, List<String>> REACTIONS = Map.of(
@@ -74,11 +88,23 @@ public final class ItemHandoffHandler {
             "%s gave me a %s. I'll hold onto it.",
             "Thanks for the %s, %s."
         ),
+        // Junk reactions — only shown when the bot truly doesn't need the item
         ItemTier.JUNK, List.of(
             "%s threw a %s at me... really? 😒",
             "Ugh, %s — a %s? You couldn't find anything better?",
             "A %s from %s. Gee, thanks for the... thoughtful gift. 🙄"
         )
+    );
+
+    /**
+     * Reactions used when a JUNK item is reclassified to COMMON because the
+     * bot actually needed it.  More grateful than standard COMMON but not as
+     * enthusiastic as RARE.
+     */
+    private static final List<String> NEEDED_JUNK_REACTIONS = List.of(
+        "Oh, %s gave me some %s — actually needed that, thanks!",
+        "Thanks %s! I was running low on %s, perfect timing.",
+        "%s came through with %s just when I needed it. Appreciate it!"
     );
 
     // -----------------------------------------------------------------------
@@ -88,10 +114,9 @@ public final class ItemHandoffHandler {
     /**
      * Called when the bot picks up an item that was thrown by a player.
      *
-     * @param bot       the bot that picked up the item
-     * @param thrower   the player who threw the item (may be {@code null} if
-     *                  the item had no owner / was already on the ground)
-     * @param stack     the item stack that was picked up
+     * @param bot     the bot that picked up the item
+     * @param thrower the player who threw the item ({@code null} if unknown)
+     * @param stack   the item stack that was picked up
      */
     public static void onBotPickedUpItem(
             ServerPlayerEntity bot,
@@ -104,21 +129,35 @@ public final class ItemHandoffHandler {
         String itemName    = stack.getName().getString();
         String throwerName = (thrower != null) ? thrower.getName().getString() : "someone";
 
-        ItemTier tier = ItemTier.of(stack);
+        ItemTier rawTier = ItemTier.of(stack);
 
-        // 1. Apply mood impulse
-        float[] delta = IMPULSE.getOrDefault(tier, new float[]{0f, 0f});
+        // ------------------------------------------------------------------
+        // Need-aware override: reclassify JUNK → COMMON when the bot's
+        // inventory has fewer than NEED_THRESHOLD of this item.
+        // ------------------------------------------------------------------
+        boolean neededJunk = false;
+        ItemTier effectiveTier = rawTier;
+        if (rawTier == ItemTier.JUNK) {
+            int held = countItemInInventory(bot, stack);
+            if (held < NEED_THRESHOLD) {
+                effectiveTier = ItemTier.COMMON;
+                neededJunk = true;
+                LOGGER.info("[handoff] JUNK → COMMON override for '{}': bot only has {} (threshold {})",
+                        itemName, held, NEED_THRESHOLD);
+            }
+        }
+
+        // 1. Apply mood impulse (uses effective tier)
+        float[] delta = IMPULSE.getOrDefault(effectiveTier, new float[]{0f, 0f});
         MoodEngine.applyDelta(botName, delta[0], delta[1]);
 
-        LOGGER.info("[handoff] {} picked up {} ({}) from {} — mood Δv={} Δa={}",
-                botName, itemName, tier, throwerName, delta[0], delta[1]);
+        LOGGER.info("[handoff] {} picked up {} (raw={} effective={}) from {} — mood Δv={} Δa={}",
+                botName, itemName, rawTier, effectiveTier, throwerName, delta[0], delta[1]);
 
         // 2. Send chat reaction (only when thrown by a real player)
         if (thrower != null) {
-            String reaction = pickReaction(tier, throwerName, itemName);
-            // Bot sends the message as itself using the server command manager
+            String reaction = pickReaction(effectiveTier, neededJunk, throwerName, itemName);
             if (bot.getServer() != null) {
-                // Use the server's thread to send chat safely
                 bot.getServer().execute(() -> {
                     try {
                         bot.getServer().getCommandManager().executeWithPrefix(
@@ -137,16 +176,52 @@ public final class ItemHandoffHandler {
     // Helpers
     // -----------------------------------------------------------------------
 
-    private static String pickReaction(ItemTier tier, String throwerName, String itemName) {
-        List<String> pool = REACTIONS.getOrDefault(tier, REACTIONS.get(ItemTier.COMMON));
+    /**
+     * Counts how many items matching {@code reference}'s item type the bot
+     * currently holds across the entire inventory (hotbar + main + offhand).
+     * This check runs <em>before</em> the picked-up stack is merged in, so it
+     * reflects what the bot already had.
+     */
+    private static int countItemInInventory(ServerPlayerEntity bot, ItemStack reference) {
+        Identifier refId = Registries.ITEM.getId(reference.getItem());
+        int total = 0;
+        for (int i = 0; i < bot.getInventory().size(); i++) {
+            ItemStack slot = bot.getInventory().getStack(i);
+            if (!slot.isEmpty() && Registries.ITEM.getId(slot.getItem()).equals(refId)) {
+                total += slot.getCount();
+            }
+        }
+        return total;
+    }
+
+    /**
+     * Picks a reaction template and formats it.
+     *
+     * @param effectiveTier the tier after need-aware override
+     * @param neededJunk    {@code true} if raw tier was JUNK but reclassified
+     * @param throwerName   name of the player who threw the item
+     * @param itemName      display name of the item
+     */
+    private static String pickReaction(
+            ItemTier effectiveTier,
+            boolean neededJunk,
+            String throwerName,
+            String itemName) {
+
+        List<String> pool;
+        if (neededJunk) {
+            // Use the specialised "needed junk" pool so the reaction is
+            // clearly grateful rather than just generic COMMON indifference.
+            pool = NEEDED_JUNK_REACTIONS;
+        } else {
+            pool = REACTIONS.getOrDefault(effectiveTier, REACTIONS.get(ItemTier.COMMON));
+        }
+
         String template = pool.get(RNG.nextInt(pool.size()));
-        // Templates have two %s slots: (thrower, item) or (item, thrower) depending on phrasing.
-        // We detect which order the template expects by looking at which name appears first.
-        // For simplicity all templates use order: thrower first, item second.
         try {
             return String.format(template, throwerName, itemName);
         } catch (Exception e) {
-            return throwerName + " gave me a " + itemName + "!";
+            return throwerName + " gave me " + itemName + ".";
         }
     }
 }
