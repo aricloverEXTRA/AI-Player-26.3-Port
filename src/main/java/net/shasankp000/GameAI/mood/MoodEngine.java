@@ -18,7 +18,7 @@ import java.util.concurrent.TimeUnit;
  *
  * <h3>Decay</h3>
  * A single background scheduler fires every {@value #DECAY_INTERVAL_SECONDS} seconds
- * and nudges every bot's state 2 % toward {@link AffectiveState#NEUTRAL}.
+ * and nudges every bot's state 2 % toward {@link AffectiveState#NEUTRAL}.
  * This means extreme states naturally fade over ~3–4 minutes of inactivity.
  *
  * <h3>Usage</h3>
@@ -40,7 +40,7 @@ public final class MoodEngine {
 
     /**
      * How strongly each tick pulls mood toward neutral.
-     * {@code 0.02f} means 2 % per 30 s → halves extreme states in ~17 minutes.
+     * {@code 0.02f} means 2 % per 30 s → halves extreme states in ~17 minutes.
      */
     private static final float DECAY_FACTOR = 0.02f;
 
@@ -89,7 +89,7 @@ public final class MoodEngine {
      * Applies a valence + arousal delta to the bot's current state.
      * The result is clamped to valid ranges automatically by {@link AffectiveState}.
      *
-     * @param botName the bot whose mood to adjust
+     * @param botName  the bot whose mood to adjust
      * @param dValence valence change  (+positive/−negative; typical range ±0.05–0.30)
      * @param dArousal arousal change  (+more excited/−calmer;  typical range ±0.05–0.20)
      */
@@ -117,6 +117,25 @@ public final class MoodEngine {
      */
     public static void remove(String botName) {
         STATES.remove(botName);
+    }
+
+    /**
+     * Alias for {@link #remove(String)}.  Called by {@code BotEventHandler.onBotDespawn}
+     * so both mood and persona state are cleaned up with the same method name.
+     */
+    public static void evict(String botName) {
+        remove(botName);
+        LOGGER.debug("[mood-engine] evicted state for bot '{}'", botName);
+    }
+
+    /**
+     * One manual decay tick — called from the RL loop's {@code finally} block
+     * so mood nudges toward neutral on every decision cycle regardless of the
+     * background scheduler.
+     */
+    public static void decayTick(String botName) {
+        STATES.computeIfPresent(botName, (k, state) ->
+            state.decayToward(AffectiveState.NEUTRAL, DECAY_FACTOR));
     }
 
     /**
