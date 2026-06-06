@@ -19,6 +19,7 @@ import net.shasankp000.FilingSystem.ManualConfig;
 import net.shasankp000.GameAI.BotEventHandler;
 import net.shasankp000.GameAI.autonomous.AutonomousManager;
 import net.shasankp000.GameAI.autonomous.ServerChatEventBridge;
+import net.shasankp000.GameAI.handoff.ItemHandoffListener;
 
 import net.shasankp000.Database.QTableStorage;
 import net.shasankp000.Entity.AutoFaceEntity;
@@ -92,6 +93,9 @@ public class AIPlayer implements ModInitializer {
 		// Register the server-side chat bridge so WorldEventListener receives
 		// join/leave/death/advancement messages for all bots.
 		ServerChatEventBridge.register();
+
+		// Feature 4.2 — Smart Item Handoff: react to players throwing items at the bot.
+		ItemHandoffListener.register();
 
 
 		CompletableFuture.runAsync(() -> {
