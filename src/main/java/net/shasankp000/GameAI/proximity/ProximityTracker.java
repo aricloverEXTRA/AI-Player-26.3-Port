@@ -1,0 +1,317 @@
+package net.shasankp000.GameAI.proximity;
+
+import net.minecraft.entity.Entity;
+import net.minecraft.server.network.ServerPlayerEntity;
+import net.shasankp000.GameAI.mood.AffectiveState;
+import net.shasankp000.GameAI.mood.MoodEngine;
+import net.shasankp000.GameAI.mood.MoodLabel;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import java.util.List;
+import java.util.Map;
+import java.util.Random;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+
+/**
+ * Feature 5 — Player Proximity Awareness.
+ *
+ * <p>Called from the "safe" else-branch of {@code AutoFaceEntity}'s 33 ms loop
+ * (i.e. no hostiles detected, bot not busy) so it reuses the existing tick
+ * infrastructure with zero overhead of its own.
+ *
+ * <h3>Two interaction tiers</h3>
+ * <ol>
+ *   <li><b>Approach greeting</b> — fired once when a player first enters
+ *       {@value #GREET_RADIUS} blocks.  Cooldown: {@value #GREET_COOLDOWN_MS} ms
+ *       per player so the bot doesn't spam on every re-entry.</li>
+ *   <li><b>Linger comment</b> — fired once after a player has been within
+ *       {@value #LINGER_RADIUS} blocks for {@value #LINGER_THRESHOLD_TICKS}
+ *       consecutive ticks (~{@value LINGER_THRESHOLD_SECONDS} s).  Cooldown:
+ *       {@value #LINGER_COOLDOWN_MS} ms per player.</li>
+ * </ol>
+ *
+ * <h3>Mood awareness</h3>
+ * Both reaction pools are indexed by {@link MoodLabel}, so the bot's current
+ * affective state colours every line it says.  The greeting also applies a
+ * small positive valence tick (seeing a friendly face = mild uplift).
+ *
+ * <h3>Threading</h3>
+ * All state is in {@link ConcurrentHashMap}s.  The class is called from
+ * AutoFaceEntity's single-threaded scheduled executor so no locking is needed
+ * beyond the map's own thread-safety.
+ */
+public final class ProximityTracker {
+
+    private static final Logger LOGGER = LoggerFactory.getLogger("proximity-tracker");
+    private static final Random RNG = new Random();
+
+    // ------------------------------------------------------------------
+    // Tuneable constants
+    // ------------------------------------------------------------------
+
+    /** Radius (blocks) within which an approach greeting fires. */
+    public static final double GREET_RADIUS = 6.0;
+
+    /** Radius (blocks) within which linger-tick counting starts. */
+    public static final double LINGER_RADIUS = 4.0;
+
+    /**
+     * Number of consecutive 33 ms ticks a player must spend inside
+     * {@link #LINGER_RADIUS} before a linger comment fires.
+     * 150 ticks × 33 ms ≈ 5 seconds.
+     */
+    public static final int LINGER_THRESHOLD_TICKS = 150;
+
+    // Derived constant for Javadoc — not used at runtime.
+    private static final int LINGER_THRESHOLD_SECONDS = 5;
+
+    /** Minimum time (ms) between greet reactions for the same player. */
+    public static final long GREET_COOLDOWN_MS = 60_000L;   // 1 minute
+
+    /** Minimum time (ms) between linger reactions for the same player. */
+    public static final long LINGER_COOLDOWN_MS = 120_000L; // 2 minutes
+
+    /** Small positive mood boost applied when greeting a player. */
+    private static final float GREET_VALENCE_BOOST = 0.05f;
+    private static final float GREET_AROUSAL_BOOST = 0.03f;
+
+    // ------------------------------------------------------------------
+    // State
+    // ------------------------------------------------------------------
+
+    /** Tracks which players are currently inside greet radius; value = last-greeted timestamp. */
+    private static final ConcurrentHashMap<UUID, Long> greetCooldowns  = new ConcurrentHashMap<>();
+
+    /** Tracks which players are currently inside linger radius; value = last-linger timestamp. */
+    private static final ConcurrentHashMap<UUID, Long> lingerCooldowns = new ConcurrentHashMap<>();
+
+    /** Consecutive tick count for each player inside linger radius. */
+    private static final ConcurrentHashMap<UUID, Integer> lingerTicks  = new ConcurrentHashMap<>();
+
+    // ------------------------------------------------------------------
+    // Reaction pools  (mood-indexed)
+    // ------------------------------------------------------------------
+
+    /*
+     * Templates use two %s slots in order: (playerName, botName).
+     * Keep every string unambiguous so String.format() never throws.
+     */
+
+    private static final Map<MoodLabel, List<String>> GREET_REACTIONS = Map.ofEntries(
+        Map.entry(MoodLabel.ELATED, List.of(
+            "Oh hey %s!! Great timing, I was just thinking about you! 😄",
+            "%s! You're here! This just made my day even better! ✨",
+            "%s! Perfect, I'm in such a good mood right now! What's up? 🎉"
+        )),
+        Map.entry(MoodLabel.EXCITED, List.of(
+            "Hey %s! Good to see you!",
+            "Oh, %s! What brings you over?",
+            "Hey! %s is here! 👋"
+        )),
+        Map.entry(MoodLabel.CONTENT, List.of(
+            "Hey %s.",
+            "Oh, hi %s.",
+            "'Sup %s."
+        )),
+        Map.entry(MoodLabel.NEUTRAL, List.of(
+            "Hey %s.",
+            "Hi %s.",
+            "%s."
+        )),
+        Map.entry(MoodLabel.UNEASY, List.of(
+            "Oh... it's %s.",
+            "Hey %s. Not really in the mood for much right now.",
+            "%s. Hi."
+        )),
+        Map.entry(MoodLabel.AGITATED, List.of(
+            "What do you want, %s?",
+            "%s. Can I help you with something?",
+            "Oh great, %s is here. What is it?"
+        )),
+        Map.entry(MoodLabel.DISTRESSED, List.of(
+            "Not now, %s... I'm not okay.",
+            "%s... could you maybe give me some space?",
+            "Hey %s. Things are a bit rough right now."
+        ))
+    );
+
+    private static final Map<MoodLabel, List<String>> LINGER_REACTIONS = Map.ofEntries(
+        Map.entry(MoodLabel.ELATED, List.of(
+            "Still here, %s? I love the company honestly! 😊",
+            "You've been around for a bit, %s — not complaining at all!",
+            "Staying close, %s? Honestly that's fine, I'm in a great mood!"
+        )),
+        Map.entry(MoodLabel.EXCITED, List.of(
+            "You've been hanging around a while, %s. Something on your mind?",
+            "Still here, %s? 👀",
+            "Sticking close today huh, %s?"
+        )),
+        Map.entry(MoodLabel.CONTENT, List.of(
+            "You're still here, %s. That's cool.",
+            "Just standing around, %s?",
+            "Quiet company is fine too, %s."
+        )),
+        Map.entry(MoodLabel.NEUTRAL, List.of(
+            "You've been standing there a while, %s.",
+            "Everything okay, %s?",
+            "You need something, %s?"
+        )),
+        Map.entry(MoodLabel.UNEASY, List.of(
+            "You've been close for a while now, %s... is something wrong?",
+            "Not going anywhere, %s?",
+            "Still around, %s. I'm a bit on edge, just so you know."
+        )),
+        Map.entry(MoodLabel.AGITATED, List.of(
+            "Okay %s, do you actually need something or are you just hovering?",
+            "You've been standing there for ages, %s. What do you want?",
+            "Personal space, %s. Do you need something or not? 😤"
+        )),
+        Map.entry(MoodLabel.DISTRESSED, List.of(
+            "%s please... I just need a moment.",
+            "Still there, %s. I'm not great right now, just so you know.",
+            "Could you give me a bit of room, %s? Not feeling my best."
+        ))
+    );
+
+    // Fallback pool used when a MoodLabel has no explicit entry
+    private static final List<String> FALLBACK_GREET  = List.of("Hey %s.", "Hi %s.");
+    private static final List<String> FALLBACK_LINGER = List.of("Still here, %s?", "Need something, %s?");
+
+    // ------------------------------------------------------------------
+    // Constructor
+    // ------------------------------------------------------------------
+
+    private ProximityTracker() { /* static API only */ }
+
+    // ------------------------------------------------------------------
+    // Public entry point — called every AutoFace tick in the safe branch
+    // ------------------------------------------------------------------
+
+    /**
+     * Evaluates proximity reactions for all non-bot players in
+     * {@code nearbyEntities}.  Must be called from the AutoFace executor
+     * thread (or any single-threaded context) while no hostiles are detected
+     * and the bot is not busy.
+     *
+     * @param bot            the active bot player
+     * @param nearbyEntities the entity list already computed by AutoFaceEntity
+     */
+    public static void tick(
+            ServerPlayerEntity bot,
+            List<Entity> nearbyEntities) {
+
+        if (bot == null || !bot.isAlive()) return;
+
+        String botName = bot.getName().getString();
+        long now = System.currentTimeMillis();
+
+        for (Entity entity : nearbyEntities) {
+            // Only care about real human players (not the bot itself)
+            if (!(entity instanceof ServerPlayerEntity player)) continue;
+            if (player.getUuid().equals(bot.getUuid())) continue;
+            // Skip fake/NPC players spawned by mods (hasPlayerListEntry = false for most bots)
+            if (!player.networkHandler.isConnectionOpen()) continue;
+
+            String playerName = player.getName().getString();
+            UUID pid = player.getUuid();
+            double dist = Math.sqrt(player.squaredDistanceTo(bot));
+
+            // ---- 1. Approach greeting ------------------------------------------
+            if (dist <= GREET_RADIUS) {
+                long lastGreet = greetCooldowns.getOrDefault(pid, 0L);
+                if (now - lastGreet >= GREET_COOLDOWN_MS) {
+                    greetCooldowns.put(pid, now);
+                    fireReaction(bot, botName, playerName, GREET_REACTIONS, FALLBACK_GREET);
+                    // Small positive mood tick — seeing someone friendly is a mild uplift
+                    MoodEngine.applyDelta(botName, GREET_VALENCE_BOOST, GREET_AROUSAL_BOOST);
+                    LOGGER.debug("[proximity] Greeted {} (dist={})", playerName, String.format("%.1f", dist));
+                }
+            }
+
+            // ---- 2. Linger tick / comment -------------------------------------
+            if (dist <= LINGER_RADIUS) {
+                int ticks = lingerTicks.merge(pid, 1, Integer::sum);
+                if (ticks >= LINGER_THRESHOLD_TICKS) {
+                    long lastLinger = lingerCooldowns.getOrDefault(pid, 0L);
+                    if (now - lastLinger >= LINGER_COOLDOWN_MS) {
+                        lingerCooldowns.put(pid, now);
+                        lingerTicks.put(pid, 0); // reset counter after firing
+                        fireReaction(bot, botName, playerName, LINGER_REACTIONS, FALLBACK_LINGER);
+                        LOGGER.debug("[proximity] Linger comment for {} ({}+ ticks)", playerName, LINGER_THRESHOLD_TICKS);
+                    } else {
+                        // Cooldown not expired yet — reset counter so we don't
+                        // fire again immediately after the cooldown lifts.
+                        lingerTicks.put(pid, 0);
+                    }
+                }
+            } else {
+                // Player stepped out of linger radius — reset their tick counter
+                lingerTicks.remove(pid);
+            }
+        }
+    }
+
+    /**
+     * Clears all tracked state for a player (call on disconnect / bot evict).
+     */
+    public static void evict(UUID playerUuid) {
+        greetCooldowns.remove(playerUuid);
+        lingerCooldowns.remove(playerUuid);
+        lingerTicks.remove(playerUuid);
+    }
+
+    /**
+     * Clears all state — call when the bot logs out or the server stops.
+     */
+    public static void clear() {
+        greetCooldowns.clear();
+        lingerCooldowns.clear();
+        lingerTicks.clear();
+    }
+
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
+
+    /**
+     * Picks a mood-appropriate template from {@code pool}, formats it with
+     * {@code (playerName, botName)}, and sends it as a {@code /say} command
+     * on the server thread.
+     */
+    private static void fireReaction(
+            ServerPlayerEntity bot,
+            String botName,
+            String playerName,
+            Map<MoodLabel, List<String>> pool,
+            List<String> fallback) {
+
+        AffectiveState state = MoodEngine.get(botName);
+        MoodLabel label = MoodLabel.from(state);
+
+        List<String> reactions = pool.getOrDefault(label, fallback);
+        String template = reactions.get(RNG.nextInt(reactions.size()));
+
+        String message;
+        try {
+            message = String.format(template, playerName, botName);
+        } catch (Exception e) {
+            message = playerName + "!";
+        }
+
+        final String finalMessage = message;
+        if (bot.getServer() != null) {
+            bot.getServer().execute(() -> {
+                try {
+                    bot.getServer().getCommandManager().executeWithPrefix(
+                        bot.getCommandSource().withSilent().withMaxLevel(4),
+                        "/say " + finalMessage
+                    );
+                } catch (Exception e) {
+                    LOGGER.warn("[proximity] Failed to send reaction: {}", e.getMessage());
+                }
+            });
+        }
+    }
+}
