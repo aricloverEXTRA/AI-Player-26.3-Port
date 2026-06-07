@@ -1,6 +1,5 @@
 package net.shasankp000.GameAI.handoff;
 
-import net.fabricmc.fabric.api.event.player.PlayerPickupItemCallback;
 import net.minecraft.entity.ItemEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.ItemStack;
@@ -8,7 +7,6 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.text.Text;
-import net.minecraft.util.ActionResult;
 import net.minecraft.util.math.Vec3d;
 import net.shasankp000.GameAI.BotEventHandler;
 import org.slf4j.Logger;
@@ -19,7 +17,7 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Listens for item-throw events and drives the two-phase trade protocol.
+ * Drives the two-phase sneak-throw trade protocol (Feature 7).
  *
  * <h2>Phase 1 — Offer detection</h2>
  * When a player throws an item <em>while sneaking</em> that lands within
@@ -28,12 +26,16 @@ import java.util.concurrent.ConcurrentHashMap;
  * counter-offer in chat.
  *
  * <h2>Phase 2 — Delivery confirmation</h2>
- * When the same player throws a second item (matching the original offer item)
- * the bot completes the swap: it removes the counter-offer item from its own
- * inventory and drops it at its feet for the player to collect.
+ * When the same player throws a second item matching the original offer item
+ * the bot completes the swap: it removes the counter-offer from its inventory
+ * and drops it at its feet for the player to collect.
  *
- * <p>Sessions that expire ({@link TradeSession#EXPIRY_TICKS} ticks) are pruned
- * on every hook invocation.
+ * <p>Sessions expire after {@link TradeSession#EXPIRY_TICKS} ticks (~30 s).
+ *
+ * <p>In Fabric API 0.116.9+1.21.1 {@code PlayerPickupItemCallback} no longer
+ * exists.  Detection is done via {@link net.shasankp000.mixin.PlayerPickupMixin},
+ * which injects into {@code PlayerEntity.pickUpItem(ItemEntity, int)} and calls
+ * {@link #dispatch(PlayerEntity, ItemEntity)} directly.
  */
 public final class TradeListener {
 
@@ -45,20 +47,24 @@ public final class TradeListener {
     /** Active sessions, keyed by thrower UUID. */
     private static final Map<UUID, TradeSession> SESSIONS = new ConcurrentHashMap<>();
 
+    private static volatile boolean registered = false;
+
     private TradeListener() {}
 
     // ── Registration ────────────────────────────────────────────────────────
 
     /**
-     * Call once during mod initialisation (e.g. from your main
-     * {@code ModInitializer}) to wire up the pickup callback.
+     * Marks the listener as active.  The actual hook is wired by
+     * {@link net.shasankp000.mixin.PlayerPickupMixin} — this method just
+     * records intent so {@link #dispatch} knows to run.
      */
     public static void register() {
-        PlayerPickupItemCallback.EVENT.register(TradeListener::onPlayerPickupItem);
-        LOGGER.info("[trade] TradeListener registered");
+        if (registered) return;
+        registered = true;
+        LOGGER.info("[trade] TradeListener registered (mixin-backed).");
     }
 
-    // ── Tick-based expiry (call from ServerTickEvents or BotEventHandler) ───
+    // ── Tick-based expiry ────────────────────────────────────────────────────
 
     /**
      * Prunes expired sessions.  Hook this into a server tick event or call it
@@ -68,30 +74,41 @@ public final class TradeListener {
         SESSIONS.entrySet().removeIf(e -> e.getValue().isExpired(currentTick));
     }
 
-    // ── PlayerPickupItemCallback ─────────────────────────────────────────────
+    // ── Dispatch (called by PlayerPickupMixin) ───────────────────────────────
 
-    private static ActionResult onPlayerPickupItem(PlayerEntity picker,
-                                                   ItemEntity itemEntity) {
+    /**
+     * Called by {@link net.shasankp000.mixin.PlayerPickupMixin} on every
+     * server-side item pickup.  Returns {@code true} if the item was consumed
+     * by the trade system and the mixin should discard it (cancel vanilla
+     * pickup), or {@code false} to let normal pickup proceed.
+     *
+     * @param picker     the player who picked up the item
+     * @param itemEntity the item entity being picked up
+     * @return {@code true} to suppress vanilla pickup, {@code false} to pass through
+     */
+    public static boolean dispatch(PlayerEntity picker, ItemEntity itemEntity) {
+        if (!registered) return false;
+
         UUID throwerUuid = itemEntity.getThrower();
-        if (throwerUuid == null) return ActionResult.PASS;
+        if (throwerUuid == null) return false;
 
         ServerPlayerEntity bot = BotEventHandler.bot;
-        if (bot == null) return ActionResult.PASS;
+        if (bot == null) return false;
 
         MinecraftServer server = bot.getServer();
-        if (server == null) return ActionResult.PASS;
+        if (server == null) return false;
 
         ServerPlayerEntity thrower = server.getPlayerManager().getPlayer(throwerUuid);
-        if (thrower == null) return ActionResult.PASS;
-        if (thrower.getUuid().equals(bot.getUuid())) return ActionResult.PASS;
+        if (thrower == null) return false;
+        if (thrower.getUuid().equals(bot.getUuid())) return false;
 
         double distToBot = itemEntity.getPos().distanceTo(bot.getPos());
-        if (distToBot > TRADE_RANGE) return ActionResult.PASS;
+        if (distToBot > TRADE_RANGE) return false;
 
-        if (!thrower.isSneaking()) return ActionResult.PASS;
+        if (!thrower.isSneaking()) return false;
 
         ItemStack thrown = itemEntity.getStack();
-        if (thrown.isEmpty()) return ActionResult.PASS;
+        if (thrown.isEmpty()) return false;
 
         long currentTick = bot.getServerWorld().getTime();
         tickPrune(currentTick);
@@ -106,7 +123,7 @@ public final class TradeListener {
                 thrower.sendMessage(
                     Text.literal("§e[" + bot.getName().getString() + "] §fSorry, I have nothing fair to offer for that."),
                     false);
-                return ActionResult.PASS;
+                return false;
             }
 
             TradeSession session = new TradeSession(throwerUuid, thrown, counterOffer, currentTick);
@@ -124,7 +141,8 @@ public final class TradeListener {
             LOGGER.info("[trade] Session opened: {} offers {} for {}",
                 thrower.getName().getString(), offName, ctrName);
 
-            return ActionResult.FAIL;
+            // Return false: let the bot pick up Phase-1 thrown item normally
+            return false;
 
         } else {
             // ── Phase 2: complete the trade ──────────────────────────────────
@@ -132,7 +150,7 @@ public final class TradeListener {
                 thrower.sendMessage(
                     Text.literal("§e[" + bot.getName().getString() + "] §fThat's not what we agreed on."),
                     false);
-                return ActionResult.PASS;
+                return false;
             }
 
             boolean removed = removeOneFromBotInventory(bot, existing.counterOfferItem);
@@ -142,7 +160,7 @@ public final class TradeListener {
                         + "] §fI can't find that item in my inventory anymore. Trade cancelled."),
                     false);
                 SESSIONS.remove(throwerUuid);
-                return ActionResult.PASS;
+                return false;
             }
 
             bot.getInventory().insertStack(thrown.copy());
@@ -162,7 +180,8 @@ public final class TradeListener {
                 TradeEvaluator.displayName(existing.counterOfferItem));
 
             SESSIONS.remove(throwerUuid);
-            return ActionResult.FAIL;
+            // Return true: item was consumed by trade, suppress vanilla pickup
+            return true;
         }
     }
 
@@ -190,7 +209,7 @@ public final class TradeListener {
         world.spawnEntity(ie);
     }
 
-    // ── Public session access (for /bot trade command in modCommandRegistry) ─
+    // ── Public session access ────────────────────────────────────────────────
 
     /** Returns the active session for {@code playerUuid}, or {@code null}. */
     public static TradeSession getSession(UUID playerUuid) {
@@ -199,8 +218,6 @@ public final class TradeListener {
 
     /**
      * Forcibly removes a session (used by {@code /bot trade cancel}).
-     * Made public so {@code modCommandRegistry} can call this from the
-     * {@code Commands} package.
      */
     public static void cancelSession(UUID playerUuid) {
         SESSIONS.remove(playerUuid);
