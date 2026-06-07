@@ -42,6 +42,68 @@ public class ollamaClient {
     private static final Pattern THINK_BLOCK = Pattern.compile("<think>([\\s\\S]*?)</think>");
     private static final ExecutorService BOT_TASK_POOL = Executors.newCachedThreadPool();
 
+    // ── LLMContextBridge API ──────────────────────────────────────────────────
+
+    /**
+     * Cheap availability guard used by {@link net.shasankp000.Personality.LLMContextBridge}.
+     *
+     * <p>Returns {@code true} when the client has been successfully initialised
+     * ({@link #isInitialized} is set to {@code true} at the end of
+     * {@link #initializeOllamaClient()}).  This avoids an extra network round-trip
+     * on every LLM call; the startup ping in {@link #pingOllamaServer()} already
+     * confirms reachability.
+     *
+     * <p>Falls back to a live {@code ollamaAPI.ping()} only when the client has
+     * not yet been initialised (e.g. autonomous engine fires before the bot has
+     * fully spawned), so callers never block indefinitely.
+     *
+     * @return {@code true} if Ollama is ready to accept requests.
+     */
+    public static boolean isAvailable() {
+        if (isInitialized) return true;
+        // Not yet initialised — do a quick live check rather than returning false
+        // immediately, so early autonomous goals can still reach Ollama.
+        try {
+            return ollamaAPI.ping();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    /**
+     * Sends a single-turn prompt to Ollama and returns the text reply.
+     *
+     * <p>Uses the same model and {@link OllamaAPIHelper#smartChat} path as the
+     * rest of the codebase so reasoning-model {@code <think>} blocks are stripped
+     * automatically before the reply is returned.
+     *
+     * <p>This method is <strong>blocking</strong>; always call it from a
+     * background thread (e.g. inside {@code CompletableFuture.supplyAsync}).
+     *
+     * @param prompt The full prompt text to send to the LLM.
+     * @return The content portion of the LLM reply (think-blocks stripped).
+     * @throws Exception if the Ollama API call fails.
+     */
+    public static String sendMessage(String prompt) throws Exception {
+        String selectedLM = AIPlayer.CONFIG.getSelectedLanguageModel();
+
+        List<OllamaChatMessage> messages = new ArrayList<>();
+        messages.add(new OllamaChatMessage(OllamaChatMessageRole.SYSTEM, generateSystemPrompt()));
+        messages.add(new OllamaChatMessage(OllamaChatMessageRole.USER, prompt));
+
+        OllamaThinkingResponse response = OllamaAPIHelper.smartChat(
+                ollamaAPI,
+                host,
+                selectedLM,
+                messages
+        );
+
+        // Return only the non-thinking portion so callers get clean text.
+        return response.getContent();
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
+
     public static void runFromChat(String botName, String message, UUID playerUUID) {
         MinecraftServer server = AIPlayer.serverInstance;
         ServerPlayerEntity bot = server.getPlayerManager().getPlayer(botName);
@@ -59,7 +121,7 @@ public class ollamaClient {
                 routeIntent(message, botSource, playerUUID);
             } catch (Exception e) {
                 LOGGER.error("Chat processing error: ", e);
-                ChatUtils.sendChatMessages(botSource, "⚠️ I'm confused! Please report this.");
+                ChatUtils.sendChatMessages(botSource, "\u26a0\ufe0f I'm confused! Please report this.");
             } finally {
                 // Resume autonomous loop after the interaction is handled
                 AutonomousManager.getInstance().setPlayerControlled(botName, false);
@@ -91,7 +153,7 @@ public class ollamaClient {
                 routeIntent(message, botSource, Objects.requireNonNull(playerSource.getPlayer()).getUuid());
             } catch (Exception e) {
                 LOGGER.error("NLP error: ", e);
-                ChatUtils.sendChatMessages(botSource, "⚠️ NLP issue. Report to developer.");
+                ChatUtils.sendChatMessages(botSource, "\u26a0\ufe0f NLP issue. Report to developer.");
             } finally {
                 AutonomousManager.getInstance().setPlayerControlled(botName, false);
             }
@@ -101,50 +163,50 @@ public class ollamaClient {
     private static void routeIntent(String message, ServerCommandSource botSource, UUID playerUUID) throws Exception {
         NLPProcessor.Intent intent = NLPProcessor.getIntention(message);
 
-        LOGGER.info("📨 Received intent: {}", intent);
+        LOGGER.info("\uD83D\uDCE8 Received intent: {}", intent);
 
         switch (intent) {
             case GENERAL_CONVERSATION, ASK_INFORMATION -> {
                 BOT_TASK_POOL.submit(() -> {
                     Thread.currentThread().setName("RAG2-Worker");
-                    LOGGER.info("🧵 Started RAG2 worker thread");
+                    LOGGER.info("\uD83E\uDDF5 Started RAG2 worker thread");
                     RAG2.run(message, botSource, intent);
-                    LOGGER.info("✅ Finished RAG2 worker thread");
+                    LOGGER.info("\u2705 Finished RAG2 worker thread");
                 });
             }
 
             case REQUEST_ACTION -> {
                 BOT_TASK_POOL.submit(() -> {
                     Thread.currentThread().setName("Function-Caller-Worker");
-                    LOGGER.info("🧵 Started FunctionCallerV2 worker thread");
+                    LOGGER.info("\uD83E\uDDF5 Started FunctionCallerV2 worker thread");
                     new FunctionCallerV2(botSource, playerUUID);
                     FunctionCallerV2.run(message);
-                    LOGGER.info("✅ Finished FunctionCallerV2 worker thread");
+                    LOGGER.info("\u2705 Finished FunctionCallerV2 worker thread");
                 });
             }
 
             default -> {
-                LOGGER.warn("⚠️ Intent unclear, retrying with LLM classification...");
-                ChatUtils.sendChatMessages(botSource, "🔍 Reanalyzing...");
+                LOGGER.warn("\u26a0\ufe0f Intent unclear, retrying with LLM classification...");
+                ChatUtils.sendChatMessages(botSource, "\uD83D\uDD0D Reanalyzing...");
 
                 NLPProcessor.Intent retry = retryIntentLLM(message);
 
-                LOGGER.info("📨 Retry intent: {}", retry);
+                LOGGER.info("\uD83D\uDCE8 Retry intent: {}", retry);
 
                 if (retry == NLPProcessor.Intent.GENERAL_CONVERSATION || retry == NLPProcessor.Intent.ASK_INFORMATION) {
                     BOT_TASK_POOL.submit(() -> {
                         Thread.currentThread().setName("RAG2-Retry-Worker");
-                        LOGGER.info("🧵 Started RAG2 retry worker thread");
+                        LOGGER.info("\uD83E\uDDF5 Started RAG2 retry worker thread");
                         RAG2.run(message, botSource, retry);
-                        LOGGER.info("✅ Finished RAG2 retry worker thread");
+                        LOGGER.info("\u2705 Finished RAG2 retry worker thread");
                     });
                 } else if (retry == NLPProcessor.Intent.REQUEST_ACTION) {
                     BOT_TASK_POOL.submit(() -> {
                         Thread.currentThread().setName("Function-Caller-Retry-Worker");
-                        LOGGER.info("🧵 Started FunctionCallerV2 retry worker thread");
+                        LOGGER.info("\uD83E\uDDF5 Started FunctionCallerV2 retry worker thread");
                         new FunctionCallerV2(botSource, playerUUID);
                         FunctionCallerV2.run(message);
-                        LOGGER.info("✅ Finished FunctionCallerV2 worker thread");
+                        LOGGER.info("\u2705 Finished FunctionCallerV2 worker thread");
                     });
                 } else {
                     throw new intentMisclassification("LLM failed to classify intent.");
@@ -167,13 +229,13 @@ public class ollamaClient {
         try {
             boolean reachable = ollamaAPI.ping();
             if (reachable) {
-                LOGGER.info("✓ Ollama server is alive and responding");
+                LOGGER.info("\u2713 Ollama server is alive and responding");
             } else {
-                LOGGER.warn("⚠ Ollama server ping returned false");
+                LOGGER.warn("\u26a0 Ollama server ping returned false");
             }
             return reachable;
         } catch (Exception e) {
-            LOGGER.warn("⚠ Ollama server is not reachable: {}. AI chat features will be unavailable.", e.getMessage());
+            LOGGER.warn("\u26a0 Ollama server is not reachable: {}. AI chat features will be unavailable.", e.getMessage());
             LOGGER.info("Please ensure Ollama is installed and running on localhost:11434");
             return false;
         }
@@ -215,11 +277,11 @@ public class ollamaClient {
                     LOGGER.info("Ollama Client initialized. Initial response: {}", response.getContent());
 
                     if (response.hasThinking()) {
-                        LOGGER.info("💭 Model provided thinking: {} chars", response.getThinking().length());
+                        LOGGER.info("\uD83D\uDCAD Model provided thinking: {} chars", response.getThinking().length());
                     }
 
                     server.execute(() ->
-                            server.sendMessage(Text.of("§9" + botName + " is ready!"))
+                            server.sendMessage(Text.of("\u00a79" + botName + " is ready!"))
                     );
 
                     isInitialized = true;
@@ -243,7 +305,7 @@ public class ollamaClient {
 
             if (!success) {
                 LOGGER.error("Failed to initialize Ollama after 3 attempts.");
-                server.sendMessage(Text.of("§c§lCould not establish uplink."));
+                server.sendMessage(Text.of("\u00a7c\u00a7lCould not establish uplink."));
             }
         });
     }
@@ -288,7 +350,7 @@ public class ollamaClient {
     public static void sendInitialResponse(ServerCommandSource botSource) {
         MinecraftServer server = botSource.getServer();
 
-        // ✅ Schedule the WHOLE logic back to the main thread
+        // \u2705 Schedule the WHOLE logic back to the main thread
         server.execute(() -> {
             processLLMOutput(initialResponse, botName, botSource);
 
@@ -300,13 +362,13 @@ public class ollamaClient {
                                 net.shasankp000.FilingSystem.EmbeddingClientFactory.createClient();
                         List<Double> embedding = embeddingClient.generateEmbedding(generateSystemPrompt());
                         SQLiteDB.storeMemory("conversation", generateSystemPrompt(), initialResponse, embedding);
-                        LOGGER.info("✅ Saved initial response using {} embeddings.", embeddingClient.getProvider());
+                        LOGGER.info("\u2705 Saved initial response using {} embeddings.", embeddingClient.getProvider());
                     } catch (Exception e) {
-                        LOGGER.error("❌ Failed saving initial response: {}", e.getMessage(), e);
+                        LOGGER.error("\u274c Failed saving initial response: {}", e.getMessage(), e);
                     }
                 });
             } else {
-                LOGGER.info("🗃️ Initial response already in DB.");
+                LOGGER.info("\uD83D\uDDC3\uFE0F Initial response already in DB.");
             }
         });
     }
