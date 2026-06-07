@@ -76,6 +76,9 @@ public class BotEventHandler {
     private static StateActions.Action previousAction = null;
     private static double previousReward = 0.0;
 
+    // Singleton RLAgent – lazily created and cached for external callers
+    private static RLAgent cachedRLAgent = null;
+
     // Periodic reflection scheduler
     private static long lastReflectionTime = System.currentTimeMillis();
     private static final long REFLECTION_INTERVAL_MS = TimeUnit.MINUTES.toMillis(5); // Reflect every 5 minutes
@@ -104,10 +107,43 @@ public class BotEventHandler {
     // ─────────────────────────────────────────────────────────────────────────
 
     /**
+     * Returns the shared TransitionHistory used by this handler's RL loop.
+     * Callers such as {@code modCommandRegistry} can use this to surface
+     * recent state-action transitions for diagnostics or the trade evaluator.
+     */
+    public static StateTransition.TransitionHistory getTransitionHistory() {
+        return transitionHistory;
+    }
+
+    /**
+     * Returns (or lazily creates) a shared {@link RLAgent} instance.
+     * When an active agent is passed into {@link #detectAndReact} its epsilon
+     * is kept in sync with this cached copy so external callers always see
+     * an up-to-date agent.
+     *
+     * @return the singleton RLAgent for this handler
+     */
+    public static RLAgent getRLAgent() {
+        if (cachedRLAgent == null) {
+            // Try to restore epsilon from disk so training progress is preserved
+            double savedEpsilon = 1.0;
+            try {
+                Double loaded = QTableStorage.loadEpsilon(qTableDir + File.separator + "epsilon.bin");
+                if (loaded != null) savedEpsilon = loaded;
+            } catch (Exception ignored) { /* first run – start fresh */ }
+            cachedRLAgent = new RLAgent(savedEpsilon, null);
+        }
+        return cachedRLAgent;
+    }
+
+    /**
      * Handle bot death - learn from the sequence of actions that led to death
      */
     public static void handleBotDeath(QTable qTable, RLAgent rlAgent) {
         LOGGER.info("💀 Bot died - analyzing death sequence for learning...");
+
+        // Keep cached agent in sync
+        if (rlAgent != null) cachedRLAgent = rlAgent;
 
         // Evict mood/persona state on death so the next spawn starts fresh
         if (bot != null) {
@@ -165,6 +201,9 @@ public class BotEventHandler {
     }
 
     public void detectAndReact(RLAgent rlAgentHook, double distanceToHostileEntity, QTable qTable) throws IOException {
+        // Keep cached agent in sync with whatever the caller passes in
+        if (rlAgentHook != null) cachedRLAgent = rlAgentHook;
+
         synchronized (monitorLock) {
             if (isExecuting) {
                 System.out.println("Executing detection code - already processing threat");
@@ -565,6 +604,9 @@ public class BotEventHandler {
     }
 
     public void detectAndReactPlayMode(RLAgent rlAgentHook, QTable qTable) {
+        // Keep cached agent in sync
+        if (rlAgentHook != null) cachedRLAgent = rlAgentHook;
+
         synchronized (monitorLock) {
             if (isExecuting) {
                 System.out.println("Already executing detection code, skipping...");
