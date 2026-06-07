@@ -55,19 +55,31 @@ public final class ItemHandoffListener {
         ItemStack stack = itemEntity.getStack();
         if (stack.isEmpty()) return;
 
-        // Resolve the original thrower
+        // Resolve the original thrower.
+        // In 1.21.1, ItemEntity no longer exposes getThrower().
+        // We use getOwner() as the primary signal (set when a player throws an item)
+        // and fall back to checking the entity's NBT thrower UUID via the owner entity.
         ServerPlayerEntity thrower = null;
+
+        // Primary: getOwner() returns the entity that "owns" the item (set on throw)
         if (itemEntity.getOwner() instanceof ServerPlayerEntity ownerPlayer
                 && !ownerPlayer.getUuid().equals(serverPlayer.getUuid())) {
             thrower = ownerPlayer;
         }
-        if (thrower == null && itemEntity.getThrower() != null) {
-            java.util.UUID throwerId = itemEntity.getThrower();
-            net.minecraft.server.MinecraftServer srv = serverPlayer.getServer();
-            if (srv != null) {
-                ServerPlayerEntity candidate = srv.getPlayerManager().getPlayer(throwerId);
-                if (candidate != null && !candidate.getUuid().equals(serverPlayer.getUuid())) {
-                    thrower = candidate;
+
+        // Fallback: scan the item entity's NBT for the Thrower UUID written by vanilla
+        // (net.minecraft.entity.ItemEntity stores it under the "Thrower" key).
+        if (thrower == null) {
+            net.minecraft.nbt.NbtCompound nbt = new net.minecraft.nbt.NbtCompound();
+            itemEntity.writeNbt(nbt);
+            if (nbt.containsUuid("Thrower")) {
+                java.util.UUID throwerId = nbt.getUuid("Thrower");
+                net.minecraft.server.MinecraftServer srv = serverPlayer.getServer();
+                if (srv != null && !throwerId.equals(serverPlayer.getUuid())) {
+                    ServerPlayerEntity candidate = srv.getPlayerManager().getPlayer(throwerId);
+                    if (candidate != null) {
+                        thrower = candidate;
+                    }
                 }
             }
         }

@@ -85,6 +85,18 @@ public class modCommandRegistry {
         }
     }
 
+    // ---------------------------------------------------------------------------
+    // Movement helpers used by PathTracer and other internal callers
+    // ---------------------------------------------------------------------------
+
+    /**
+     * Issues a continuous-forward movement command to the bot via the
+     * PlayerEx /player command.  Called by PathTracer to start each segment.
+     */
+    public static void moveForward(MinecraftServer server, ServerCommandSource botSource, String botName) {
+        server.getCommandManager().executeWithPrefix(botSource, "/player " + botName + " move forward continuous");
+    }
+
 
     public static void register() {
         // Register threat debug command
@@ -1078,7 +1090,8 @@ public class modCommandRegistry {
 
             botName = bot.getName().getString();
 
-            GoTo.startGoingForward(server, botSource, botName, till);
+            // Issue continuous-forward movement command; a scheduled stop will cancel it.
+            moveForward(server, botSource, botName);
 
             scheduler.schedule(new BotStopTask(server, botSource, botName), till * 1000L, TimeUnit.MILLISECONDS);
 
@@ -1157,8 +1170,16 @@ public class modCommandRegistry {
             botName = bot.getName().getString();
             boolean shouldSprint = sprint.equals("true");
 
-            GoTo.goToBlock(server, botSource, bot, targetPos, shouldSprint);
-
+            // GoTo.goTo() is the only navigation entry-point; run on a virtual thread
+            // so the command dispatcher thread is not blocked.
+            final boolean sprintFinal = shouldSprint;
+            Thread.ofVirtual().name("bot-go-" + botName).start(() -> {
+                try {
+                    GoTo.goTo(botSource, targetPos.getX(), targetPos.getY(), targetPos.getZ(), sprintFinal);
+                } catch (Exception e) {
+                    LOGGER.error("[botGo] Navigation failed for '{}': {}", botName, e.getMessage());
+                }
+            });
 
         } catch (CommandSyntaxException e) {
             LOGGER.error("Failed to get entity argument: " + e);
@@ -1166,26 +1187,51 @@ public class modCommandRegistry {
 
     }
 
+    /**
+     * Handles /bot stance <bot> <mode> [target].
+     *
+     * <p>BotStance was redesigned: it no longer uses AGGRESSIVE/DEFENSIVE/PASSIVE
+     * enum constants.  The supported modes now map to the spatial behaviours
+     * exposed by {@link BotStance}: STAY (anchor at current position) and
+     * FOLLOW (follow a named player).  NONE / "clear" releases any active stance.
+     *
+     * <pre>
+     *   /bot stance &lt;bot&gt; stay          – anchor to current position
+     *   /bot stance &lt;bot&gt; follow &lt;name&gt; – follow player &lt;name&gt;
+     *   /bot stance &lt;bot&gt; none           – clear stance
+     * </pre>
+     */
     private static void botStance(@NotNull CommandContext<ServerCommandSource> context, boolean hasTarget) {
         try {
             ServerPlayerEntity bot = EntityArgumentType.getPlayer(context, "bot");
-            ServerCommandSource botSource = bot.getCommandSource().withSilent().withMaxLevel(4);
-            String mode = StringArgumentType.getString(context, "mode");
-            String target = hasTarget ? StringArgumentType.getString(context, "target") : null;
-            BotStance stance = switch (mode.toLowerCase()) {
-                case "aggressive" -> BotStance.AGGRESSIVE;
-                case "defensive"  -> BotStance.DEFENSIVE;
-                case "passive"    -> BotStance.PASSIVE;
-                default -> {
+            String mode   = StringArgumentType.getString(context, "mode").toLowerCase();
+            String target  = hasTarget ? StringArgumentType.getString(context, "target") : null;
+            String botName = bot.getName().getString();
+
+            switch (mode) {
+                case "stay" -> {
+                    BotStance.setStay(botName, bot.getBlockPos());
                     ChatUtils.sendSystemMessage(context.getSource(),
-                        "Invalid stance mode. Use: aggressive, defensive, passive");
-                    yield null;
+                            "[" + botName + "] stance set to STAY at " + bot.getBlockPos());
                 }
-            };
-            if (stance == null) return;
-            StanceController.setStance(bot, stance, target);
-            ChatUtils.sendSystemMessage(context.getSource(),
-                "Stance set to " + stance.name() + (target != null ? " targeting " + target : ""));
+                case "follow" -> {
+                    if (target == null || target.isBlank()) {
+                        ChatUtils.sendSystemMessage(context.getSource(),
+                                "FOLLOW stance requires a target player name.");
+                        return;
+                    }
+                    BotStance.setFollow(botName, target);
+                    ChatUtils.sendSystemMessage(context.getSource(),
+                            "[" + botName + "] stance set to FOLLOW targeting '" + target + "'");
+                }
+                case "none", "clear" -> {
+                    StanceController.cancelStance(botName);
+                    ChatUtils.sendSystemMessage(context.getSource(),
+                            "[" + botName + "] stance cleared.");
+                }
+                default -> ChatUtils.sendSystemMessage(context.getSource(),
+                        "Invalid stance mode '" + mode + "'. Use: stay, follow, none");
+            }
         } catch (CommandSyntaxException e) {
             LOGGER.error("Failed to get entity argument: {}", e.getMessage());
         }
@@ -1218,8 +1264,8 @@ public class modCommandRegistry {
                 double healthRatio = hostile.getHealth() / hostile.getMaxHealth();
                 threatScore += (1 - healthRatio) * 20;
 
-                // Armor factor
-                double armorValue = hostile.getAttributeValue(EntityAttributes.ARMOR);
+                // Armor factor — EntityAttributes.GENERIC_ARMOR is the 1.21.1 registry key
+                double armorValue = hostile.getAttributeValue(EntityAttributes.GENERIC_ARMOR);
                 threatScore -= armorValue * 0.5;
             }
 
