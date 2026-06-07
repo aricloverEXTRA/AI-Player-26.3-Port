@@ -22,14 +22,14 @@ public final class TradeEvaluator {
 
     private TradeEvaluator() {}
 
-    // ── Tier table ──────────────────────────────────────────────────────────
+    // ── Tier table ──────────────────────────────────────────────────────────────
     // Higher number == more valuable.
     private static final Map<Item, Integer> TIER = new HashMap<>();
 
     static {
         // Tier 1 — common
         for (Item it : new Item[]{
-                Items.STICK, Items.WOOD_SWORD, Items.WOODEN_PICKAXE,
+                Items.STICK, Items.WOODEN_SWORD, Items.WOODEN_PICKAXE,
                 Items.OAK_PLANKS, Items.COBBLESTONE, Items.SAND, Items.GRAVEL,
                 Items.WHEAT, Items.BREAD, Items.APPLE, Items.PORKCHOP,
                 Items.COOKED_PORKCHOP, Items.BEEF, Items.COOKED_BEEF,
@@ -76,7 +76,7 @@ public final class TradeEvaluator {
         }
     }
 
-    // ── Public API ──────────────────────────────────────────────────────────
+    // ── Public API ──────────────────────────────────────────────────────────────
 
     /**
      * Returns a counter-offer the bot is willing to make, or
