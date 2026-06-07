@@ -36,6 +36,10 @@ import java.util.concurrent.ConcurrentHashMap;
  * exists.  Detection is done via {@link net.shasankp000.mixin.PlayerPickupMixin},
  * which injects into {@code PlayerEntity.pickUpItem(ItemEntity, int)} and calls
  * {@link #dispatch(PlayerEntity, ItemEntity)} directly.
+ *
+ * <p><b>MC 1.21.1 note:</b> {@code ItemEntity} has no {@code getThrower()}
+ * method.  Thrower identity is resolved via {@code itemEntity.getOwner()}:
+ * if the owner is a {@link ServerPlayerEntity} it is treated as the thrower.
  */
 public final class TradeListener {
 
@@ -89,18 +93,28 @@ public final class TradeListener {
     public static boolean dispatch(PlayerEntity picker, ItemEntity itemEntity) {
         if (!registered) return false;
 
-        UUID throwerUuid = itemEntity.getThrower();
-        if (throwerUuid == null) return false;
+        // FIX: MC 1.21.1 has no ItemEntity#getThrower().
+        // Use getOwner(): if the entity owner is a ServerPlayerEntity we treat
+        // them as the thrower.  getOwner() returns the Entity whose UUID was
+        // stored via setOwner() when the item was thrown by a player.
+        ServerPlayerEntity thrower = null;
+        if (itemEntity.getOwner() instanceof ServerPlayerEntity ownerPlayer) {
+            thrower = ownerPlayer;
+        }
+        if (thrower == null) return false;
+
+        UUID throwerUuid = thrower.getUuid();
 
         ServerPlayerEntity bot = BotEventHandler.bot;
         if (bot == null) return false;
 
+        // Ignore if the bot itself threw the item
+        if (throwerUuid.equals(bot.getUuid())) return false;
+
+        // We no longer need a separate getPlayerManager lookup — thrower is already resolved above.
+        // Keep server reference only for potential future use.
         MinecraftServer server = bot.getServer();
         if (server == null) return false;
-
-        ServerPlayerEntity thrower = server.getPlayerManager().getPlayer(throwerUuid);
-        if (thrower == null) return false;
-        if (thrower.getUuid().equals(bot.getUuid())) return false;
 
         double distToBot = itemEntity.getPos().distanceTo(bot.getPos());
         if (distToBot > TRADE_RANGE) return false;
