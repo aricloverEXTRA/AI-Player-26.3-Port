@@ -56,7 +56,8 @@ public class PromptBuilder {
         sb.append("Dimension: ").append(dimension).append("\n");
 
         if (state != null) {
-            sb.append("Time of day: ").append(state.getTime()).append("\n");
+            // Fix: State exposes getTimeOfDay(), not getTime()
+            sb.append("Time of day: ").append(state.getTimeOfDay()).append("\n");
 
             long hostileCount = state.getNearbyEntities() == null ? 0L :
                     state.getNearbyEntities().stream()
