@@ -2,6 +2,7 @@ package net.shasankp000.GameAI.planner;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * Maps informal / alternative verbs and phrases to canonical GoalMapper keywords.
@@ -137,7 +138,7 @@ public class SynonymMap {
         String normalized = result;
         for (Map.Entry<String, String> entry : SYNONYM_TO_CANONICAL.entrySet()) {
             normalized = normalized.replaceAll(
-                "(?i)\\b" + java.util.regex.Pattern.quote(entry.getKey()) + "\\b",
+                "(?i)\\b" + Pattern.quote(entry.getKey()) + "\\b",
                 entry.getValue()
             );
         }
