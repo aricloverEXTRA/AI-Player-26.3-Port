@@ -20,23 +20,9 @@ import org.slf4j.LoggerFactory;
  *       persona has been selected for this bot; omitted otherwise so the old
  *       behaviour is exactly preserved.</li>
  *   <li><b>Mood fragment</b> (optional) — a short sentence describing the bot's
- *       current emotional state from {@link AffectiveState#toPromptFragment()}.
+ *       current emotional state derived from {@link MoodLabel#toPromptFragment()}.
  *       Injected when a mood engine state is available; omitted otherwise.</li>
  * </ol>
- *
- * <h3>Migration path for callers</h3>
- * Both {@code ollamaClient.generateSystemPrompt()} and
- * {@code LLMServiceHandler.generateSystemPrompt(String)} should be replaced with:
- * <pre>
- *   // minimal — identical to the old behaviour
- *   PromptBuilder.build(botName, null, null);
- *
- *   // full — persona + live mood
- *   PersonaTemplate persona = PersonaRegistry.getOrDefault(
- *           AIPlayer.CONFIG.getBotPersona(botName));
- *   AffectiveState  mood    = MoodEngine.getInstance().getState(botName);
- *   PromptBuilder.build(botName, persona, mood);
- * </pre>
  */
 public final class PromptBuilder {
 
@@ -66,14 +52,10 @@ public final class PromptBuilder {
 
         StringBuilder sb = new StringBuilder(2048);
 
-        // ------------------------------------------------------------------
-        // Layer 1 — base identity (preserved verbatim from original code)
-        // ------------------------------------------------------------------
+        // Layer 1 — base identity
         sb.append(baseIdentity(botName));
 
-        // ------------------------------------------------------------------
-        // Layer 2 — persona (omit if null, so old callers are unaffected)
-        // ------------------------------------------------------------------
+        // Layer 2 — persona (omit if null)
         if (persona != null) {
             sb.append("\n\n");
             sb.append("Personality: ").append(persona.basePromptFragment());
@@ -81,13 +63,11 @@ public final class PromptBuilder {
                     persona.id(), botName);
         }
 
-        // ------------------------------------------------------------------
-        // Layer 3 — live mood (omit if null, so old callers are unaffected)
-        // ------------------------------------------------------------------
+        // Layer 3 — live mood (omit if null)
         if (mood != null) {
-            MoodLabel label = mood.namedMood();
-            String fragment = mood.toPromptFragment();
-            sb.append("\n\n").append(fragment);
+            MoodLabel label = MoodLabel.from(mood);
+            String fragment = label.toPromptFragment();
+            sb.append("\n\nCurrent mood: ").append(fragment).append(".");
             LOGGER.debug("[prompt-builder] Injecting mood {} ({}) for bot '{}'",
                     label, mood, botName);
         }
@@ -97,10 +77,6 @@ public final class PromptBuilder {
 
     /**
      * Convenience overload — builds a prompt with no persona or mood overlay.
-     * Produces output identical to the original hard-coded {@code generateSystemPrompt()}.
-     *
-     * @param botName The in-game bot name.
-     * @return        The base system prompt.
      */
     public static String build(String botName) {
         return build(botName, null, null);
@@ -110,12 +86,6 @@ public final class PromptBuilder {
     // Internal helpers
     // -------------------------------------------------------------------------
 
-    /**
-     * Returns the immutable base-identity section.
-     * Content is character-for-character identical to the old hard-coded strings
-     * in both {@code ollamaClient} and {@code LLMServiceHandler} so callers that
-     * simply swap to {@code PromptBuilder.build(botName)} observe no LLM behaviour change.
-     */
     private static String baseIdentity(String botName) {
         return "You are a Minecraft player named " + botName +
                " who is connected to Minecraft using a mod. You exist within the" +
