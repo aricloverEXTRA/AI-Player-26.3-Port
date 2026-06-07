@@ -4,6 +4,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Static registry of all available {@link PersonaTemplate} instances.
@@ -18,14 +19,6 @@ import java.util.*;
  *   <tr><td>sarcastic</td> <td>Sarcastic</td> <td>(-0.10, +0.20)</td></tr>
  *   <tr><td>cautious</td>  <td>Cautious</td>  <td>(-0.20, +0.40)</td></tr>
  * </table>
- *
- * <h3>Custom personas (stub for 3.6)</h3>
- * {@link #loadCustom()} is a no-op for now.  Feature 3.6 will implement
- * reading {@code config/aiplayer/personas.json5} and merging entries here.
- *
- * <h3>Thread safety</h3>
- * The registry map is populated once at class-load time and then read-only,
- * so no synchronisation is required for lookups.
  */
 public final class PersonaRegistry {
 
@@ -89,7 +82,51 @@ public final class PersonaRegistry {
     private PersonaRegistry() { /* static API only */ }
 
     // -------------------------------------------------------------------------
-    // Public API
+    // Per-bot active persona state
+    // -------------------------------------------------------------------------
+
+    /** Maps botName → active persona ID for each spawned bot. */
+    private static final ConcurrentHashMap<String, String> ACTIVE = new ConcurrentHashMap<>();
+
+    /**
+     * Sets the active persona for {@code botName}.
+     * If {@code personaId} is not registered the call is silently ignored
+     * and the previous selection is retained.
+     */
+    public static void setActive(String botName, String personaId) {
+        if (botName == null || personaId == null) return;
+        String key = personaId.toLowerCase(Locale.ROOT);
+        if (!REGISTRY.containsKey(key)) {
+            LOGGER.warn("[persona-registry] setActive: unknown persona '{}' — ignoring", personaId);
+            return;
+        }
+        ACTIVE.put(botName, key);
+        LOGGER.info("[persona-registry] Bot '{}' persona set to '{}'", botName, key);
+    }
+
+    /**
+     * Returns the active {@link PersonaTemplate} for {@code botName},
+     * falling back to {@value #DEFAULT_ID} if no selection has been made.
+     * Never returns {@code null}.
+     */
+    public static PersonaTemplate getActive(String botName) {
+        String id = ACTIVE.getOrDefault(botName, DEFAULT_ID);
+        return getOrDefault(id);
+    }
+
+    /**
+     * Removes the stored persona selection for {@code botName}.
+     * Called by {@code BotEventHandler} on bot despawn / death so memory
+     * does not grow unboundedly between sessions.
+     */
+    public static void evict(String botName) {
+        if (botName == null) return;
+        ACTIVE.remove(botName);
+        LOGGER.debug("[persona-registry] Evicted persona state for bot '{}'", botName);
+    }
+
+    // -------------------------------------------------------------------------
+    // Registry read API
     // -------------------------------------------------------------------------
 
     /**
@@ -112,8 +149,6 @@ public final class PersonaRegistry {
 
     /**
      * Returns an unmodifiable ordered set of all registered persona IDs.
-     * Iteration order matches insertion order (built-ins first, then custom).
-     * Used by {@code /bot persona} tab-completion.
      */
     public static Set<String> ids() {
         return REGISTRY.keySet();
@@ -130,21 +165,7 @@ public final class PersonaRegistry {
     // Custom persona loading (stub for Feature 3.6)
     // -------------------------------------------------------------------------
 
-    /**
-     * Stub for Feature 3.6 — custom persona support.
-     *
-     * <p>When implemented, this method will:
-     * <ol>
-     *   <li>Locate {@code config/aiplayer/personas.json5}.</li>
-     *   <li>Parse each entry into a {@link PersonaTemplate}.</li>
-     *   <li>Merge into the registry, allowing custom IDs to override built-ins.</li>
-     * </ol>
-     *
-     * <p>For now this is a no-op so callers can already be wired up without
-     * waiting for the full implementation.
-     */
     public static void loadCustom() {
-        // TODO Feature 3.6 — parse config/aiplayer/personas.json5 and merge into REGISTRY
         LOGGER.debug("[persona-registry] loadCustom() called (no-op until Feature 3.6)");
     }
 }
