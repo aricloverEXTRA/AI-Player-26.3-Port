@@ -76,7 +76,7 @@ public class HybridPlanner {
      *
      * <p>Builds a transient {@link HybridPlanner} from fresh planner components,
      * calls {@link #buildPlan(State, String, short)}, and executes each
-     * {@link PlannedStep} in sequence via {@link BotEventHandler}.
+     * {@link PlannedStep} in sequence via {@link net.shasankp000.FunctionCaller.FunctionCallerV2}.
      *
      * @param bot         The bot {@link ServerPlayerEntity} executing the goal.
      * @param goalId      Numeric goal identifier from {@link GoalMapper}.
@@ -87,7 +87,8 @@ public class HybridPlanner {
                 bot.getName().getString(), goalId, goalText);
 
         // 1. Obtain the current bot State snapshot from BotEventHandler
-        State currentState = BotEventHandler.getCurrentState(bot);
+        // FIX: getCurrentState() takes no arguments
+        State currentState = BotEventHandler.getCurrentState();
         if (currentState == null) {
             LOGGER.warn("[HybridPlanner] Could not obtain State for bot '{}' -- skipping goal '{}'",
                     bot.getName().getString(), goalText);
@@ -95,11 +96,15 @@ public class HybridPlanner {
         }
 
         // 2. Build planner components
-        ActionGraph actionGraph       = ActionGraph.buildDefault();
-        GoalVector goalVector         = new GoalVector();
-        MarkovChain2 markovChain      = new MarkovChain2();
-        RLAgent rlAgent               = BotEventHandler.getRLAgent();
-        SequenceRiskAnalyzer riskAnalyzer = new SequenceRiskAnalyzer();
+        // FIX: GoalVector must be created first; ActionGraph constructor requires GoalVector
+        //      (no static ActionGraph.buildDefault() exists)
+        GoalVector goalVector             = new GoalVector();
+        ActionGraph actionGraph           = new ActionGraph(goalVector);
+        MarkovChain2 markovChain          = new MarkovChain2();
+        // FIX: getRLAgent() takes no arguments
+        RLAgent rlAgent                   = BotEventHandler.getRLAgent();
+        // FIX: SequenceRiskAnalyzer constructor requires RLAgent
+        SequenceRiskAnalyzer riskAnalyzer = new SequenceRiskAnalyzer(rlAgent);
 
         HybridPlanner planner = new HybridPlanner(
                 actionGraph, goalVector, markovChain, rlAgent, riskAnalyzer);
@@ -107,26 +112,36 @@ public class HybridPlanner {
         try {
             // 3. Build the plan
             Plan plan = planner.buildPlan(currentState, goalText, goalId);
-            if (plan == null || plan.getSteps().isEmpty()) {
-                LOGGER.warn("[HybridPlanner] No plan produced for goal '{}' -- falling back to BotEventHandler direct dispatch",
+            // FIX: Plan uses a public field `steps`, not a getSteps() getter
+            if (plan == null || plan.steps.isEmpty()) {
+                LOGGER.warn("[HybridPlanner] No plan produced for goal '{}' -- logging fallback",
                         goalText);
-                // Graceful fallback: let BotEventHandler handle it as a raw goal string
-                BotEventHandler.dispatchGoalFallback(bot, goalText);
+                // FIX: BotEventHandler.dispatchGoalFallback() does not exist;
+                //      log the situation and return — the caller (AutonomousGoalEngine) handles retries
+                LOGGER.info("[HybridPlanner] Fallback: goal='{}' could not be planned by HybridPlanner; " +
+                        "AutonomousGoalEngine should retry or route via LLM.", goalText);
                 return;
             }
 
+            // FIX: plan.getSteps() → plan.steps
             LOGGER.info("[HybridPlanner] Executing plan with {} step(s) for goal '{}'",
-                    plan.getSteps().size(), goalText);
+                    plan.steps.size(), goalText);
 
             // 4. Execute each step in sequence
-            for (PlannedStep step : plan.getSteps()) {
+            // FIX: plan.getSteps() → plan.steps
+            //      step.getStepIndex() does not exist → use loop index (i+1)
+            //      step.getActionName() → step.actionName  (public field)
+            //      step.getParameters() → step.params      (public field)
+            //      BotEventHandler.executeStep() does not exist → FunctionCallerV2.dispatchPlannedStep()
+            for (int i = 0; i < plan.steps.size(); i++) {
                 if (Thread.currentThread().isInterrupted()) {
                     LOGGER.info("[HybridPlanner] Execution interrupted -- aborting plan for '{}'", goalText);
                     break;
                 }
+                PlannedStep step = plan.steps.get(i);
                 LOGGER.debug("[HybridPlanner] Step {} -- action='{}', params='{}'",
-                        step.getStepIndex(), step.getActionName(), step.getParameters());
-                BotEventHandler.executeStep(bot, step);
+                        (i + 1), step.actionName, step.params);
+                net.shasankp000.FunctionCaller.FunctionCallerV2.dispatchPlannedStep(bot, step);
             }
 
             LOGGER.info("[HybridPlanner] Plan complete for goal '{}'", goalText);
