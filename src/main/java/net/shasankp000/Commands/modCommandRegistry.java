@@ -1196,9 +1196,9 @@ public class modCommandRegistry {
      * FOLLOW (follow a named player).  NONE / "clear" releases any active stance.
      *
      * <pre>
-     *   /bot stance &lt;bot&gt; stay          – anchor to current position
-     *   /bot stance &lt;bot&gt; follow &lt;name&gt; – follow player &lt;name&gt;
-     *   /bot stance &lt;bot&gt; none           – clear stance
+     *   /bot stance <bot> stay          – anchor to current position
+     *   /bot stance <bot> follow <name> – follow player <name>
+     *   /bot stance <bot> none           – clear stance
      * </pre>
      */
     private static void botStance(@NotNull CommandContext<ServerCommandSource> context, boolean hasTarget) {
