@@ -1508,3 +1508,803 @@ public class FunctionCallerV2 {
         AutoFaceEntity.isBotMoving = false;
         logger.info("✔️ Autoface module has been reset.");
     }
+
+    private static final Map<String, List<String>> functionStateKeyMap = Map.ofEntries(
+            Map.entry("detectBlocks", List.of("lastDetectedBlock.x", "lastDetectedBlock.y", "lastDetectedBlock.z")),
+            Map.entry("goTo", List.of("botPosition.x", "botPosition.y", "botPosition.z")),
+            Map.entry("chartPathToBlock", List.of("finalBlockPos.x", "finalBlockPos.y", "finalBlockPos.z")),
+            Map.entry("faceBlock", List.of("facing.yaw", "facing.pitch")),
+            Map.entry("faceEntity", List.of("facing.entityName")),
+            Map.entry("turn", List.of("facing.direction", "facing.facing", "facing.axis")),
+            Map.entry("look", List.of("facing.direction", "facing.facing", "facing.axis")),
+            Map.entry("mineBlock", List.of("lastMineStatus")),
+            Map.entry("getOxygenLevel", List.of("oxygenLevel")),
+            Map.entry("getHungerLevel", List.of("hungerLevel")),
+            Map.entry("getHealthLevel", List.of("healthLevel"))
+    );
+
+    private static void parseOutputValues(String functionName, String output) {
+        List<String> keys = functionStateKeyMap.get(functionName);
+        if (keys == null || keys.isEmpty()) return;
+
+        List<Object> values = new ArrayList<>();
+        switch (functionName) {
+            case "goTo" -> {
+                Matcher matcher = Pattern.compile("x[:=]\\s*(-?\\d+)\\s*y[:=]\\s*(-?\\d+)\\s*z[:=]\\s*(-?\\d+)", Pattern.CASE_INSENSITIVE).matcher(output);
+                if (matcher.find()) {
+                    values.add(Integer.parseInt(matcher.group(1)));
+                    values.add(Integer.parseInt(matcher.group(2)));
+                    values.add(Integer.parseInt(matcher.group(3)));
+                }
+            }
+            case "detectBlocks" -> {
+                Matcher matcher = Pattern.compile(".*found at (-?\\d+) (-?\\d+) (-?\\d+)", Pattern.CASE_INSENSITIVE).matcher(output);
+                if (matcher.find()) {
+                    values.add(Integer.parseInt(matcher.group(1)));
+                    values.add(Integer.parseInt(matcher.group(2)));
+                    values.add(Integer.parseInt(matcher.group(3)));
+                }
+            }
+            case "turn" -> {
+                Matcher matcher = Pattern.compile("Now facing (\\w+) which is in (\\w+).*in (\\w+) axis", Pattern.CASE_INSENSITIVE).matcher(output);
+                if (matcher.find()) {
+                    values.add(matcher.group(1));
+                    values.add(matcher.group(2));
+                    values.add(matcher.group(3));
+                }
+            }
+            case "look" -> {
+                Matcher matcher = Pattern.compile("Now facing cardinal direction (\\w+) which is in (\\w+).*in (\\w+) axis", Pattern.CASE_INSENSITIVE).matcher(output);
+                if (matcher.find()) {
+                    values.add(matcher.group(1));
+                    values.add(matcher.group(2));
+                    values.add(matcher.group(3));
+                }
+            }
+            case "mineBlock" -> {
+                if (output.contains("Mining complete!")) {
+                    values.add("success");
+                } else if (output.contains("⚠️ Failed to mine block")) {
+                    values.add("failed");
+                }
+            }
+            case "getOxygenLevel" -> {
+                Matcher matcher = Pattern.compile("Oxygen Level[:=]\\s*(\\d+)", Pattern.CASE_INSENSITIVE).matcher(output);
+                if (matcher.find()) values.add(Integer.parseInt(matcher.group(1)));
+            }
+            case "getHungerLevel" -> {
+                Matcher matcher = Pattern.compile("Hunger Level[:=]\\s*(\\d+)", Pattern.CASE_INSENSITIVE).matcher(output);
+                if (matcher.find()) values.add(Integer.parseInt(matcher.group(1)));
+            }
+            case "getHealthLevel" -> {
+                Matcher matcher = Pattern.compile("Remaining hearts[:=]\\s*([\\d.]+)", Pattern.CASE_INSENSITIVE).matcher(output);
+                if (matcher.find()) values.add(Double.parseDouble(matcher.group(1)));
+            }
+            case "faceBlock" -> {
+                Matcher matcher = Pattern.compile("Yaw[:=]\\s*([\\d.-]+).*Pitch[:=]\\s*([\\d.-]+)", Pattern.CASE_INSENSITIVE).matcher(output);
+                if (matcher.find()) {
+                    values.add(Double.parseDouble(matcher.group(1)));
+                    values.add(Double.parseDouble(matcher.group(2)));
+                }
+            }
+            case "faceEntity" -> {
+                Matcher matcher = Pattern.compile("Facing entity[:=]\\s*(.+)", Pattern.CASE_INSENSITIVE).matcher(output);
+                if (matcher.find()) values.add(matcher.group(1));
+            }
+            case "chartPathToBlock" -> {
+                Matcher matcher = Pattern.compile("Bot is at (-?\\d+) (-?\\d+) (-?\\d+)").matcher(output);
+                if (matcher.find()) {
+                    values.add(Integer.parseInt(matcher.group(1)));
+                    values.add(Integer.parseInt(matcher.group(2)));
+                    values.add(Integer.parseInt(matcher.group(3)));
+                }
+            }
+        }
+
+        if (values.size() == keys.size()) {
+            updateState(keys, values, sharedState);
+        } else {
+            logger.warn("❌ Mismatch in keys/values for {} → keys: {}, values: {}", functionName, keys, values);
+        }
+    }
+
+    private static void getFunctionResultAndSave(String userInput, String executionDateTime) {
+        try {
+            // Generate context synchronously
+            String eventContext = generatePromptContext(userInput);
+            // Get embedding client
+            net.shasankp000.ServiceLLMClients.EmbeddingClient embeddingClient =
+                    net.shasankp000.FilingSystem.EmbeddingClientFactory.createClient();
+            // Generate event embedding synchronously
+            List<Double> eventEmbedding;
+            List<Double> eventContextEmbedding;
+            try {
+                eventEmbedding = embeddingClient.generateEmbedding(userInput);
+                // Generate event context embedding synchronously
+                eventContextEmbedding = embeddingClient.generateEmbedding(eventContext);
+            } catch (Exception e) {
+                logger.error("Failed to generate embeddings", e);
+                throw new RuntimeException(e);
+            }
+            // Wait until functionOutput is a valid string
+            while (functionOutput == null || !(functionOutput instanceof String)) {
+                try {
+                    Thread.sleep(500L); // Check every 500ms
+                } catch (InterruptedException e) {
+                    logger.error("Couldn't get function call output");
+                    throw new RuntimeException(e);
+                }
+            }
+            System.out.println("Received output: " + functionOutput);
+            // Generate result embedding based on the function output
+            List<Double> resultEmbedding;
+            try {
+                resultEmbedding = embeddingClient.generateEmbedding(functionOutput);
+            } catch (Exception e) {
+                logger.error("Failed to generate result embedding", e);
+                throw new RuntimeException(e);
+            }
+            // Create execution record and save it
+            ExecutionRecord executionRecord = new ExecutionRecord(executionDateTime, userInput, eventContext, functionOutput, eventEmbedding, eventContextEmbedding, resultEmbedding);
+            executionRecord.updateRecords();
+            // Clear the functionOutput to reset state
+            functionOutput = null;
+            System.out.println("Event data saved successfully.");
+        } catch (Exception e) {
+            // Log or handle the exception
+            logger.error("Error occurred while processing the function result: ", e);
+            throw new RuntimeException(e);
+        }
+    }
+
+    private static String resolvePlaceholder(String value, Map<String, Object> state) {
+        if (value == null) return "0";
+        if (value.startsWith("$")) {
+            String key = value.substring(1);
+            Object resolvedObj = SharedStateUtils.getValue(state, key);
+            if (resolvedObj == null) {
+                logger.warn("⚠️ Placeholder '{}' not found in sharedState. Using fallback value '0'", key);
+                return "0";
+            }
+            String resolved = resolvedObj.toString();
+            logger.debug("🔁 Resolved placeholder {} → {}", key, resolved);
+            return resolved;
+        }
+        return value;
+    }
+
+    private static void updateState(List<String> keys, List<Object> values, Map<String, Object> state) {
+        for (int i = 0; i < keys.size(); i++) {
+            SharedStateUtils.setValue(state, keys.get(i), values.get(i));
+            logger.info("📌 Updated sharedState: {} → {}", keys.get(i), values.get(i));
+        }
+    }
+
+    private static CompletableFuture<Void> callFunction(String functionName, Map<String, String> paramMap, Map<String, Object> state) {
+        return CompletableFuture.runAsync(() -> {
+            logger.info("🔧 callFunction: {} with params: {}", functionName, paramMap);
+
+            switch (functionName) {
+                case "goTo" -> {
+                    int x = Integer.parseInt(resolvePlaceholder(paramMap.get("x"), state));
+                    int y = Integer.parseInt(resolvePlaceholder(paramMap.get("y"), state));
+                    int z = Integer.parseInt(resolvePlaceholder(paramMap.get("z"), state));
+                    boolean sprint = Boolean.parseBoolean(resolvePlaceholder(paramMap.get("sprint"), state));
+                    logger.info("Calling method: goTo with x={} y={} z={} sprint={}", x, y, z, sprint);
+                    Tools.goTo(x, y, z, sprint);
+                }
+                case "chartPathToBlock" -> {
+                    int targetX = Integer.parseInt(resolvePlaceholder(paramMap.get("targetX"), state));
+                    int targetY = Integer.parseInt(resolvePlaceholder(paramMap.get("targetY"), state));
+                    int targetZ = Integer.parseInt(resolvePlaceholder(paramMap.get("targetZ"), state));
+                    String blockType = resolvePlaceholder(paramMap.get("blockType"), state);
+                    logger.info("Calling method: chartPathToBlock with targetX={} targetY={} targetZ={} blockType={}", targetX, targetY, targetZ, blockType);
+                    Tools.chartPathToBlock(targetX, targetY, targetZ, blockType);
+                }
+                case "faceBlock" -> {
+                    int targetX = Integer.parseInt(resolvePlaceholder(paramMap.get("targetX"), state));
+                    int targetY = Integer.parseInt(resolvePlaceholder(paramMap.get("targetY"), state));
+                    int targetZ = Integer.parseInt(resolvePlaceholder(paramMap.get("targetZ"), state));
+                    logger.info("Calling method: faceBlock with targetX={} targetY={} targetZ={}", targetX, targetY, targetZ);
+                    Tools.faceBlock(targetX, targetY, targetZ);
+                }
+                case "faceEntity" -> {
+                    int targetX = Integer.parseInt(resolvePlaceholder(paramMap.get("targetX"), state));
+                    int targetY = Integer.parseInt(resolvePlaceholder(paramMap.get("targetY"), state));
+                    int targetZ = Integer.parseInt(resolvePlaceholder(paramMap.get("targetZ"), state));
+                    logger.info("Calling method: faceEntity with targetX={} targetY={} targetZ={}", targetX, targetY, targetZ);
+                    Tools.faceEntity(targetX, targetY, targetZ);
+                }
+                case "detectBlocks" -> {
+                    String blockType = resolvePlaceholder(paramMap.get("blockType"), state);
+                    logger.info("Calling method: detectBlocks with blockType={}", blockType);
+                    Tools.detectBlocks(blockType);
+                }
+                case "turn" -> {
+                    String direction = resolvePlaceholder(paramMap.get("direction"), state);
+                    logger.info("Calling method: turn with direction={}", direction);
+                    Tools.turn(direction);
+                }
+                case "look" -> {
+                    String cardinalDirection = resolvePlaceholder(paramMap.get("cardinalDirection"), state);
+                    logger.info("Calling method: look with cardinal direction={}", cardinalDirection);
+                    Tools.look(cardinalDirection);
+                }
+                case "mineBlock" -> {
+                    int targetX = Integer.parseInt(resolvePlaceholder(paramMap.get("targetX"), state));
+                    int targetY = Integer.parseInt(resolvePlaceholder(paramMap.get("targetY"), state));
+                    int targetZ = Integer.parseInt(resolvePlaceholder(paramMap.get("targetZ"), state));
+                    logger.info("Calling method: mineBlock with targetX={} targetY={} targetZ={}", targetX, targetY, targetZ);
+                    Tools.mineBlock(targetX, targetY, targetZ);
+                }
+                case "placeBlock" -> {
+                    int targetX = Integer.parseInt(resolvePlaceholder(paramMap.get("targetX"), state));
+                    int targetY = Integer.parseInt(resolvePlaceholder(paramMap.get("targetY"), state));
+                    int targetZ = Integer.parseInt(resolvePlaceholder(paramMap.get("targetZ"), state));
+                    String blockType = resolvePlaceholder(paramMap.get("blockType"), state);
+                    logger.info("Calling method: placeBlock with targetX={} targetY={} targetZ={} blockType={}",
+                            targetX, targetY, targetZ, blockType);
+                    Tools.placeBlock(targetX, targetY, targetZ, blockType);
+                }
+                case "getOxygenLevel" -> {
+                    logger.info("Calling method: getOxygenLevel");
+                    Tools.getOxygenLevel();
+                }
+                case "getHungerLevel" -> {
+                    logger.info("Calling method: getHungerLevel");
+                    Tools.getHungerLevel();
+                }
+                case "getHealthLevel" -> {
+                    logger.info("Calling method: getHealthLevel");
+                    Tools.getHealthLevel();
+                }
+                case "updateState" -> {
+                    String keysRaw = paramMap.get("keys");
+                    String valuesRaw = paramMap.get("values");
+                    List<String> keys = List.of(keysRaw.split(","));
+                    List<String> valueStrings = List.of(valuesRaw.split(","));
+                    List<Object> values = new ArrayList<>();
+                    for (String v : valueStrings) {
+                        try {
+                            values.add(Integer.parseInt(v));
+                        } catch (NumberFormatException e1) {
+                            try {
+                                values.add(Double.parseDouble(v));
+                            } catch (NumberFormatException e2) {
+                                values.add(v);  // Fallback to string
+                            }
+                        }
+                    }
+                    updateState(keys, values, state);
+                    logger.info("Called updateState with keys={} and values={}", keys, values);
+                }
+                // Add this new case to your existing switch statement inside the callFunction method.
+                case "webSearch" -> {
+                    String query = resolvePlaceholder(paramMap.get("query"), state);
+                    logger.info("Calling method: webSearch with query='{}'", query);
+                    Tools.webSearch(query);
+                }
+                case "searchBlocks" -> {
+                    String blockType = resolvePlaceholder(paramMap.get("blockType"), state);
+                    int initialRadius = Integer.parseInt(resolvePlaceholder(paramMap.get("initialRadius"), state));
+                    int maxRadius = Integer.parseInt(resolvePlaceholder(paramMap.get("maxRadius"), state));
+                    int radiusIncrement = Integer.parseInt(resolvePlaceholder(paramMap.get("radiusIncrement"), state));
+                    logger.info("Calling method: searchBlocks with blockType={} initialRadius={} maxRadius={} increment={}",
+                            blockType, initialRadius, maxRadius, radiusIncrement);
+
+                    // Call searchBlocks and capture the result
+                    if (botSource != null && botSource.getPlayer() != null) {
+                        ServerPlayerEntity bot = botSource.getPlayer();
+                        BlockPos result = net.shasankp000.Tools.SearchBlocks.searchBlock(
+                            bot,
+                            blockType,
+                            initialRadius,
+                            maxRadius,
+                            radiusIncrement
+                        );
+
+                        // Store result in SharedState for next steps
+                        if (result != null) {
+                            SharedStateUtils.setValue(state, "found_block_x", result.getX());
+                            SharedStateUtils.setValue(state, "found_block_y", result.getY());
+                            SharedStateUtils.setValue(state, "found_block_z", result.getZ());
+                            SharedStateUtils.setValue(state, "found_block_type", blockType);
+                            SharedStateUtils.setValue(state, "search_success", true);
+                            logger.info("✓ searchBlocks found {} at ({}, {}, {})", blockType, result.getX(), result.getY(), result.getZ());
+                        } else {
+                            SharedStateUtils.setValue(state, "search_success", false);
+                            logger.warn("searchBlocks did not find {} within radius {}", blockType, maxRadius);
+                        }
+                    } else {
+                        logger.error("Cannot execute searchBlocks: bot is null");
+                    }
+                }
+                default -> logger.warn("Unknown function: {}", functionName);
+            }
+
+            logger.info("✓ Function {} execution completed", functionName);
+        });
+    }
+
+    /**
+     * Execute a Plan generated by the Planner.
+     * Converts planned steps into sequential function calls.
+     */
+    public static CompletableFuture<Boolean> executePlan(Plan plan, ActionLogWriter logWriter, State initialState) {
+        if (plan == null || plan.isEmpty()) {
+            logger.warn("Cannot execute empty plan");
+            return CompletableFuture.completedFuture(false);
+        }
+
+        if (botSource == null) {
+            logger.error("Cannot execute plan: botSource is null! Bot not initialized properly.");
+            return CompletableFuture.completedFuture(false);
+        }
+
+        logger.info("Executing plan: {}", plan.planId);
+        logger.info("Plan has {} steps with total score: {}", plan.length(), plan.getTotalScore());
+
+        // Create SharedState for inter-step communication
+        Map<String, Object> sharedState = new java.util.concurrent.ConcurrentHashMap<>();
+
+        // Debug: Log all step names
+        for (int i = 0; i < plan.steps.size(); i++) {
+            PlannedStep step = plan.steps.get(i);
+            logger.debug("  Step {}: {} (byte: {})", i + 1, step.actionName, step.actionId & 0xFF);
+        }
+
+        // ✅ Execute steps SEQUENTIALLY with blocking and state verification
+        CompletableFuture<Void> sequentialExecution = CompletableFuture.completedFuture(null);
+
+        for (int i = 0; i < plan.steps.size(); i++) {
+            PlannedStep step = plan.steps.get(i);
+            final int stepIndex = i;
+
+            sequentialExecution = sequentialExecution.thenCompose(_void -> {
+                // Get state BEFORE action
+                State stateBefore = initialState; // TODO: Could update this per step
+
+                // Convert PlannedStep to function call, resolving params from SharedState
+                Map<String, String> params = convertStepToParams(step, sharedState);
+
+                logger.info("🔧 Step {}/{}: Executing {} with params: {}",
+                    stepIndex + 1, plan.steps.size(), step.actionName, params);
+
+                return callFunction(step.actionName, params, sharedState)
+                    .thenCompose(result -> {
+                        // Add delay for game state to update (CRITICAL for sequential execution)
+                        return CompletableFuture.runAsync(() -> {
+                            try {
+                                Thread.sleep(500); // Wait 500ms for game state update
+                            } catch (InterruptedException e) {
+                                Thread.currentThread().interrupt();
+                            }
+                        });
+                    })
+                    .thenApply(_void2 -> {
+                        // Verify the step actually achieved its goal
+                        boolean verified = verifyStepOutcome(step, sharedState);
+
+                        // Log execution
+                        if (logWriter != null) {
+                            logWriter.logStep(
+                                plan.planId,
+                                plan.goalId,
+                                stateBefore,
+                                stepIndex,
+                                step,
+                                verified ? "success" : "failed_verification",
+                                verified ? 10.0 : -5.0,
+                                false
+                            );
+                        }
+
+                        if (verified) {
+                            logger.info("✓ Step {}/{}: {} completed and verified",
+                                       stepIndex + 1, plan.steps.size(), step.actionName);
+                        } else {
+                            logger.warn("⚠ Step {}/{}: {} completed but verification failed",
+                                       stepIndex + 1, plan.steps.size(), step.actionName);
+                            // If verification fails for critical action, abort
+                            if (isCriticalAction(step.actionName)) {
+                                throw new RuntimeException("Critical action verification failed: " + step.actionName);
+                            }
+                        }
+
+                        return (Void) null;
+                    })
+                    .exceptionally(ex -> {
+                        // Log failure
+                        if (logWriter != null) {
+                            logWriter.logStep(
+                                plan.planId,
+                                plan.goalId,
+                                stateBefore,
+                                stepIndex,
+                                step,
+                                "failed: " + ex.getMessage(),
+                                -10.0, // Penalty for failure
+                                false
+                            );
+                        }
+                        logger.error("✗ Step {}/{}: {} failed: {}",
+                                    stepIndex + 1, plan.steps.size(), step.actionName, ex.getMessage());
+
+                        // For critical actions, throw to abort plan
+                        if (isCriticalAction(step.actionName)) {
+                            logger.error("✗ Critical action failed, aborting plan");
+                            throw new RuntimeException("Critical action failed: " + step.actionName);
+                        }
+
+                        return null;
+                    });
+            });
+        }
+
+        return sequentialExecution.handle((result, ex) -> {
+            if (ex != null) {
+                logger.error("Plan execution failed: {}", ex.getMessage());
+                return false;
+            } else {
+                logger.info("✓ Plan {} executed successfully", plan.planId);
+                return true;
+            }
+        });
+    }
+
+    /**
+     * Convert a PlannedStep to parameter map for function calling WITH SharedState resolution.
+     */
+    private static Map<String, String> convertStepToParams(PlannedStep step, Map<String, Object> state) {
+        Map<String, String> params = new HashMap<>();
+
+        // Map action to parameters based on action name
+        String actionName = step.actionName.toLowerCase();
+
+        // Parse params string into array (comma-separated or JSON array)
+        String[] paramArray = new String[0];
+        if (step.params != null && !step.params.trim().isEmpty()) {
+            String trimmedParams = step.params.trim();
+            if (trimmedParams.startsWith("[") && trimmedParams.endsWith("]")) {
+                // JSON array format: ["x", "y", "z"]
+                String content = trimmedParams.substring(1, trimmedParams.length() - 1);
+                if (!content.trim().isEmpty()) {
+                    paramArray = content.split(",");
+                    for (int i = 0; i < paramArray.length; i++) {
+                        paramArray[i] = paramArray[i].trim().replaceAll("^\"|\"$", "");
+                    }
+                }
+            } else {
+                // Simple comma-separated: x,y,z
+                paramArray = trimmedParams.split(",");
+                for (int i = 0; i < paramArray.length; i++) {
+                    paramArray[i] = paramArray[i].trim();
+                }
+            }
+        }
+
+        // Normalize action name for comparison (case-insensitive)
+        switch (actionName) {
+            case "goto":
+            case "movetocoordinates":
+                // Try to get coords from SharedState first (if previous searchBlocks found something)
+                if (SharedStateUtils.getValue(state, "found_block_x") != null) {
+                    int blockX = (int) SharedStateUtils.getValue(state, "found_block_x");
+                    int blockY = (int) SharedStateUtils.getValue(state, "found_block_y");
+                    int blockZ = (int) SharedStateUtils.getValue(state, "found_block_z");
+
+                    // Navigate to adjacent position (not ON the block)
+                    params.put("x", String.valueOf(blockX + 1));
+                    params.put("y", String.valueOf(blockY));
+                    params.put("z", String.valueOf(blockZ));
+                    params.put("sprint", "true");
+                    logger.info("🔗 Resolved goTo params from SharedState: ({}, {}, {})", blockX+1, blockY, blockZ);
+                } else if (paramArray.length >= 3) {
+                    params.put("x", paramArray[0]);
+                    params.put("y", paramArray[1]);
+                    params.put("z", paramArray[2]);
+                    params.put("sprint", paramArray.length >= 4 ? paramArray[3] : "true");
+                }
+                break;
+
+            case "mineblock":
+            case "breakblock":
+                // Try to get coords from SharedState first
+                if (SharedStateUtils.getValue(state, "found_block_x") != null) {
+                    int blockX = (int) SharedStateUtils.getValue(state, "found_block_x");
+                    int blockY = (int) SharedStateUtils.getValue(state, "found_block_y");
+                    int blockZ = (int) SharedStateUtils.getValue(state, "found_block_z");
+                    params.put("targetX", String.valueOf(blockX));
+                    params.put("targetY", String.valueOf(blockY));
+                    params.put("targetZ", String.valueOf(blockZ));
+                    logger.info("🔗 Resolved mineBlock params from SharedState: ({}, {}, {})", blockX, blockY, blockZ);
+                } else if (paramArray.length >= 3) {
+                    params.put("targetX", paramArray[0]);
+                    params.put("targetY", paramArray[1]);
+                    params.put("targetZ", paramArray[2]);
+                }
+                break;
+
+            case "placeblock":
+                if (paramArray.length >= 4) {
+                    params.put("targetX", paramArray[0]);
+                    params.put("targetY", paramArray[1]);
+                    params.put("targetZ", paramArray[2]);
+                    params.put("blockType", paramArray[3]);
+                } else if (paramArray.length >= 1) {
+                    params.put("blockType", paramArray[0]);
+                }
+                break;
+
+            case "detectblocks":
+                // Use found_block_type from SharedState if available
+                if (SharedStateUtils.getValue(state, "found_block_type") != null) {
+                    params.put("blockType", (String) SharedStateUtils.getValue(state, "found_block_type"));
+                    logger.info("🔗 Resolved detectBlocks blockType from SharedState");
+                } else if (paramArray.length >= 1) {
+                    params.put("blockType", paramArray[0]);
+                }
+                break;
+
+            case "searchblocks":
+                if (paramArray.length >= 4) {
+                    params.put("blockType", paramArray[0]);
+                    params.put("initialRadius", paramArray[1]);
+                    params.put("maxRadius", paramArray[2]);
+                    params.put("radiusIncrement", paramArray[3]);
+                } else if (paramArray.length >= 1) {
+                    params.put("blockType", paramArray[0]);
+                    // Set defaults
+                    params.put("initialRadius", "10");
+                    params.put("maxRadius", "100");
+                    params.put("radiusIncrement", "20");
+                }
+                break;
+
+            case "turn":
+                if (paramArray.length >= 1) {
+                    params.put("direction", paramArray[0]);
+                }
+                break;
+
+            case "look":
+                if (paramArray.length >= 1) {
+                    params.put("cardinalDirection", paramArray[0]);
+                }
+                break;
+
+            case "websearch":
+                if (paramArray.length >= 1) {
+                    params.put("query", paramArray[0]);
+                }
+                break;
+
+            default:
+                logger.debug("No special parameter mapping for action: {}", actionName);
+        }
+
+        return params;
+    }
+
+    /**
+     * Verify that a step achieved its expected outcome based on SharedState changes.
+     */
+    private static boolean verifyStepOutcome(PlannedStep step, Map<String, Object> sharedState) {
+        String actionName = step.actionName.toLowerCase();
+
+        switch (actionName) {
+            case "searchblocks":
+                // Verify searchBlocks actually found something
+                Boolean searchSuccess = (Boolean) SharedStateUtils.getValue(sharedState, "search_success");
+                if (searchSuccess != null && searchSuccess) {
+                    logger.info("✓ searchBlocks verification: block found in SharedState");
+                    return true;
+                } else {
+                    logger.warn("✗ searchBlocks verification failed: no block found");
+                    return false;
+                }
+
+            case "goto":
+            case "movetocoordinates":
+                // Verify goTo moved the bot close to the target
+                Integer targetX = (Integer) SharedStateUtils.getValue(sharedState, "found_block_x");
+                Integer targetZ = (Integer) SharedStateUtils.getValue(sharedState, "found_block_z");
+
+                if (targetX != null && targetZ != null && botSource != null && botSource.getPlayer() != null) {
+                    BlockPos botPos = botSource.getPlayer().getBlockPos();
+                    double distance = Math.sqrt(Math.pow(botPos.getX() - (targetX + 1), 2) +
+                                               Math.pow(botPos.getZ() - targetZ, 2));
+
+                    if (distance <= 3.0) { // Within 3 blocks is good enough
+                        logger.info("✓ goTo verification: bot within {} blocks of target", String.format("%.1f", distance));
+                        return true;
+                    } else {
+                        logger.warn("✗ goTo verification failed: bot still {} blocks away from target", String.format("%.1f", distance));
+                        return false;
+                    }
+                }
+                // If no target in state, assume success (might be standalone goTo)
+                logger.info("✓ goTo verification: no target in SharedState, assuming success");
+                return true;
+
+            case "mineblock":
+            case "breakblock":
+                // Verify block was actually broken by checking if it still exists
+                Integer blockX = (Integer) SharedStateUtils.getValue(sharedState, "found_block_x");
+                Integer blockY = (Integer) SharedStateUtils.getValue(sharedState, "found_block_y");
+                Integer blockZ = (Integer) SharedStateUtils.getValue(sharedState, "found_block_z");
+
+                if (blockX != null && blockY != null && blockZ != null && botSource != null) {
+                    MinecraftServer server = botSource.getServer();
+                    if (server != null) {
+                        ServerWorld world = server.getOverworld();
+                        BlockPos blockPos = new BlockPos(blockX, blockY, blockZ);
+                        Block block = world.getBlockState(blockPos).getBlock();
+
+                        // Check if block is now air (successfully mined)
+                        if (block == Blocks.AIR) {
+                            logger.info("✓ mineBlock verification: block successfully removed");
+                            return true;
+                        } else {
+                            logger.warn("✗ mineBlock verification failed: block still exists at position");
+                            return false;
+                        }
+                    }
+                }
+                logger.info("✓ mineBlock verification: no target in SharedState, assuming success");
+                return true;
+
+            case "detectblocks":
+                // DetectBlocks can succeed or fail - assume success for now
+                // TODO: Could check if detectBlocks actually detected the target
+                logger.info("✓ detectBlocks verification: assuming success (TODO: verify detection)");
+                return true;
+
+            default:
+                // For other actions, assume success if no exception was thrown
+                logger.debug("✓ {} verification: default success", actionName);
+                return true;
+        }
+    }
+
+    /**
+     * Convert a PlannedStep to parameter map for function calling (legacy method without SharedState).
+     */
+    private static Map<String, String> convertStepToParams(PlannedStep step) {
+        Map<String, String> params = new HashMap<>();
+
+        // Map action to parameters based on action name
+        String actionName = step.actionName.toLowerCase();
+
+        // Parse params string into array (comma-separated or JSON array)
+        String[] paramArray = new String[0];
+        if (step.params != null && !step.params.trim().isEmpty()) {
+            String trimmedParams = step.params.trim();
+            if (trimmedParams.startsWith("[") && trimmedParams.endsWith("]")) {
+                // JSON array format: ["x", "y", "z"]
+                String content = trimmedParams.substring(1, trimmedParams.length() - 1);
+                if (!content.trim().isEmpty()) {
+                    paramArray = content.split(",");
+                    for (int i = 0; i < paramArray.length; i++) {
+                        paramArray[i] = paramArray[i].trim().replaceAll("^\"|\"$", "");
+                    }
+                }
+            } else {
+                // Simple comma-separated: x,y,z
+                paramArray = trimmedParams.split(",");
+                for (int i = 0; i < paramArray.length; i++) {
+                    paramArray[i] = paramArray[i].trim();
+                }
+            }
+        }
+
+        // Normalize action name for comparison (case-insensitive)
+        switch (actionName) {
+            case "goto":
+            case "movetocoordinates":
+                if (paramArray.length >= 3) {
+                    params.put("x", paramArray[0]);
+                    params.put("y", paramArray[1]);
+                    params.put("z", paramArray[2]);
+                    params.put("sprint", paramArray.length >= 4 ? paramArray[3] : "true");
+                }
+                break;
+
+            case "mineblock":
+            case "breakblock":
+                if (paramArray.length >= 3) {
+                    params.put("targetX", paramArray[0]);
+                    params.put("targetY", paramArray[1]);
+                    params.put("targetZ", paramArray[2]);
+                }
+                break;
+
+            case "placeblock":
+                if (paramArray.length >= 4) {
+                    params.put("targetX", paramArray[0]);
+                    params.put("targetY", paramArray[1]);
+                    params.put("targetZ", paramArray[2]);
+                    params.put("blockType", paramArray[3]);
+                } else if (paramArray.length >= 1) {
+                    params.put("blockType", paramArray[0]);
+                }
+                break;
+
+            case "detectblocks":
+                if (paramArray.length >= 1) {
+                    params.put("blockType", paramArray[0]);
+                }
+                break;
+
+            case "searchblocks":
+                if (paramArray.length >= 4) {
+                    params.put("blockType", paramArray[0]);
+                    params.put("initialRadius", paramArray[1]);
+                    params.put("maxRadius", paramArray[2]);
+                    params.put("radiusIncrement", paramArray[3]);
+                } else if (paramArray.length >= 1) {
+                    params.put("blockType", paramArray[0]);
+                    // Set defaults
+                    params.put("initialRadius", "10");
+                    params.put("maxRadius", "100");
+                    params.put("radiusIncrement", "20");
+                }
+                break;
+
+            case "turn":
+                if (paramArray.length >= 1) {
+                    params.put("direction", paramArray[0]);
+                } else {
+                    params.put("direction", "left"); // Default
+                }
+                break;
+
+            case "look":
+                if (paramArray.length >= 1) {
+                    params.put("cardinalDirection", paramArray[0]);
+                } else {
+                    params.put("cardinalDirection", "north"); // Default
+                }
+                break;
+
+            case "websearch":
+                if (paramArray.length >= 1) {
+                    params.put("query", paramArray[0]);
+                }
+                break;
+
+            // Actions with no parameters (handled by bot commands)
+            case "eat":
+            case "attack":
+            case "shoot":
+            case "evade":
+            case "retreat":
+            case "shield":
+            case "gethealthlevel":
+            case "gethungerlevel":
+            case "getoxygenlevel":
+                // No parameters needed - these are simple bot commands
+                break;
+
+            default:
+                // If action not recognized, log warning but don't fail
+                // The action might still be valid in the function caller
+                logger.debug("No parameter mapping for action: {}", actionName);
+        }
+
+        return params;
+    }
+
+    /**
+     * Determine if an action is critical (plan should abort if it fails).
+     * Critical actions are those that subsequent steps depend on.
+     */
+    private static boolean isCriticalAction(String actionName) {
+        if (actionName == null) return false;
+
+        return switch (actionName.toLowerCase()) {
+            case "searchblocks", "goto", "navigateto" -> true;
+            default -> false;
+        };
+    }
+}
