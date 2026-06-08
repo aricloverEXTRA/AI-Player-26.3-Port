@@ -85,18 +85,6 @@ public class modCommandRegistry {
         }
     }
 
-    // ---------------------------------------------------------------------------
-    // Movement helpers used by PathTracer and other internal callers
-    // ---------------------------------------------------------------------------
-
-    /**
-     * Issues a continuous-forward movement command to the bot via the
-     * PlayerEx /player command.  Called by PathTracer to start each segment.
-     */
-    public static void moveForward(MinecraftServer server, ServerCommandSource botSource, String botName) {
-        server.getCommandManager().executeWithPrefix(botSource, "/player " + botName + " move forward continuous");
-    }
-
 
     public static void register() {
         // Register threat debug command
@@ -155,15 +143,24 @@ public class modCommandRegistry {
                                         )
                                 )
                         )
+                        // ----------------------------------------------------------------
+                        // /bot stance <bot> <stay|follow|cancel> [targetPlayerName]
+                        //
+                        // stay   — bot holds its current position; auto-corrects if pushed
+                        // follow — bot shadows <targetPlayerName>; re-paths when they move
+                        // cancel — removes any active stance and stops ongoing path
+                        // ----------------------------------------------------------------
                         .then(literal("stance")
                                 .then(CommandManager.argument("bot", EntityArgumentType.player())
                                         .then(CommandManager.argument("mode", StringArgumentType.string())
+                                                // variant with optional target player name (for follow)
                                                 .then(CommandManager.argument("target", StringArgumentType.string())
                                                         .executes(context -> {
                                                             botStance(context, true);
                                                             return 1;
                                                         })
                                                 )
+                                                // variant without target (stay / cancel)
                                                 .executes(context -> {
                                                     botStance(context, false);
                                                     return 1;
@@ -316,6 +313,7 @@ public class modCommandRegistry {
                                                     assert server != null;
                                                     ServerCommandSource botSource = bot.getCommandSource().withSilent().withMaxLevel(4);
 
+                                                    // Check if bot can shoot (checks entire inventory now, not just equipped)
                                                     if (!RangedWeaponUtils.hasBowOrCrossbow(bot)) {
                                                         LOGGER.info("Bot does not have a bow or crossbow to shoot with.");
                                                         if (debugMode.equals("true")) {
@@ -324,6 +322,7 @@ public class modCommandRegistry {
                                                         return 0;
                                                     }
 
+                                                    // Prepare ammo first (move items to correct slots if needed)
                                                     String ammoType;
                                                     if (RangedWeaponUtils.hasCrossbow(bot)) {
                                                         ammoType = RangedWeaponUtils.prepareCrossbowAmmo(bot, server, botSource);
@@ -343,12 +342,15 @@ public class modCommandRegistry {
                                                         return 0;
                                                     }
 
+                                                    // Detect nearby hostile entities AND hostile players within 40 blocks
                                                     List<Entity> nearbyEntities = AutoFaceEntity.detectNearbyEntities(bot, 40);
                                                     List<Entity> hostileEntities = nearbyEntities.stream()
                                                             .filter(entity -> {
+                                                                // Include hostile mobs
                                                                 if (entity instanceof HostileEntity) {
                                                                     return true;
                                                                 }
+                                                                // Include hostile players (tracked by retaliation system)
                                                                 if (entity instanceof net.minecraft.entity.player.PlayerEntity player &&
                                                                     !player.getUuid().equals(bot.getUuid())) {
                                                                     return net.shasankp000.PlayerUtils.PlayerRetaliationTracker.isPlayerHostile(bot, player);
@@ -365,6 +367,7 @@ public class modCommandRegistry {
                                                         return 0;
                                                     }
 
+                                                    // Intelligent targeting: use risk analysis to prioritize threats
                                                     Entity target = selectHighestThreatTarget(bot, hostileEntities, debugMode.equals("true"), botSource);
 
                                                     if (target == null) {
@@ -379,9 +382,11 @@ public class modCommandRegistry {
                                                         ChatUtils.sendChatMessages(botSource, "Target acquired: " + targetName + " at " + String.format("%.1f", distance) + " blocks");
                                                     }
 
+                                                    // Pause autoface to prevent interruption
                                                     AutoFaceEntity.isShooting = true;
                                                     LOGGER.info("Paused autoface for shooting");
 
+                                                    // Switch to bow/crossbow if not already equipped
                                                     int weaponSlot = RangedWeaponUtils.getBowOrCrossbowSlot(bot);
                                                     if (weaponSlot != -1 && bot.getInventory().selectedSlot != (weaponSlot - 1)) {
                                                         server.getCommandManager().executeWithPrefix(botSource, "/player " + bot.getName().getString() + " hotbar " + weaponSlot);
@@ -525,11 +530,11 @@ public class modCommandRegistry {
                                                             .thenAccept(success -> {
                                                                 server.execute(() -> {
                                                                     if (success) {
-                                                                        ChatUtils.sendChatMessages(botSource, "\u2713 Plan executed successfully!");
-                                                                        LOGGER.info("[planner] \u2713 Goal '{}' completed", goal);
+                                                                        ChatUtils.sendChatMessages(botSource, "✓ Plan executed successfully!");
+                                                                        LOGGER.info("[planner] ✓ Goal '{}' completed", goal);
                                                                     } else {
-                                                                        ChatUtils.sendChatMessages(botSource, "\u2717 Plan execution failed");
-                                                                        LOGGER.warn("[planner] \u2717 Goal '{}' failed", goal);
+                                                                        ChatUtils.sendChatMessages(botSource, "✗ Plan execution failed");
+                                                                        LOGGER.warn("[planner] ✗ Goal '{}' failed", goal);
                                                                     }
                                                                 });
                                                             })
@@ -895,9 +900,7 @@ public class modCommandRegistry {
                                 })
                         )
 
-                        // ── Feature 2: /bot mood ─────────────────────────────────────────────
-                        // /bot mood <bot>              ->  show current mood snapshot
-                        // /bot mood <bot> <mood_label> ->  override dominant mood
+                        // Feature 2: /bot mood
                         .then(literal("mood")
                                 .then(CommandManager.argument("bot", EntityArgumentType.player())
                                         .executes(context -> {
@@ -910,7 +913,7 @@ public class modCommandRegistry {
                                         .then(CommandManager.argument("mood_label", StringArgumentType.string())
                                                 .executes(context -> {
                                                     ServerPlayerEntity bot = EntityArgumentType.getPlayer(context, "bot");
-                                                    String botName  = bot.getName().getString();
+                                                    String botName = bot.getName().getString();
                                                     String labelStr = StringArgumentType.getString(context, "mood_label").toUpperCase();
                                                     MoodLabel label;
                                                     try {
@@ -925,13 +928,13 @@ public class modCommandRegistry {
                                                     }
                                                     float valence = switch (label) {
                                                         case ELATED, CONTENT, SERENE -> 0.8f;
-                                                        case EXCITED, CALM, NEUTRAL  -> 0.0f;
+                                                        case EXCITED, CALM, NEUTRAL -> 0.0f;
                                                         case AGITATED, BORED, DEPRESSED -> -0.8f;
                                                     };
                                                     float arousal = switch (label) {
                                                         case ELATED, EXCITED, AGITATED -> 0.9f;
-                                                        case CONTENT, NEUTRAL, BORED   -> 0.5f;
-                                                        case SERENE, CALM, DEPRESSED   -> 0.1f;
+                                                        case CONTENT, NEUTRAL, BORED -> 0.5f;
+                                                        case SERENE, CALM, DEPRESSED -> 0.1f;
                                                     };
                                                     MoodEngine.set(botName, new AffectiveState(valence, arousal));
                                                     ChatUtils.sendSystemMessage(context.getSource(),
@@ -942,9 +945,7 @@ public class modCommandRegistry {
                                 )
                         )
 
-                        // ── Feature 3: /bot persona ──────────────────────────────────────────
-                        // /bot persona <bot>              ->  list available personas + show active
-                        // /bot persona <bot> <persona_id> ->  set persona
+                        // Feature 3: /bot persona
                         .then(literal("persona")
                                 .then(CommandManager.argument("bot", EntityArgumentType.player())
                                         .executes(context -> {
@@ -959,7 +960,7 @@ public class modCommandRegistry {
                                         .then(CommandManager.argument("persona_id", StringArgumentType.string())
                                                 .executes(context -> {
                                                     ServerPlayerEntity bot = EntityArgumentType.getPlayer(context, "bot");
-                                                    String botName   = bot.getName().getString();
+                                                    String botName = bot.getName().getString();
                                                     String personaId = StringArgumentType.getString(context, "persona_id");
                                                     Optional<PersonaTemplate> opt = PersonaRegistry.get(personaId);
                                                     if (opt.isEmpty()) {
@@ -972,17 +973,14 @@ public class modCommandRegistry {
                                                     PersonaTemplate template = opt.get();
                                                     PersonaRegistry.setActive(botName, personaId);
                                                     ChatUtils.sendSystemMessage(context.getSource(),
-                                                            "[" + botName + "] persona set to: "
-                                                            + template.displayName());
+                                                            "[" + botName + "] persona set to: " + template.displayName());
                                                     return 1;
                                                 })
                                         )
                                 )
                         )
 
-                        // ── Feature 4: /bot trade ────────────────────────────────────────────
-                        // /bot trade <bot>         ->  bot announces what it can offer
-                        // /bot trade <bot> cancel  ->  cancel the caller's pending session
+                        // Feature 4: /bot trade
                         .then(literal("trade")
                                 .then(CommandManager.argument("bot", EntityArgumentType.player())
                                         .executes(context -> {
@@ -998,16 +996,16 @@ public class modCommandRegistry {
                                             ItemStack botOffer = TradeEvaluator.evaluate(ItemStack.EMPTY, bot);
                                             if (botOffer.isEmpty()) {
                                                 player.sendMessage(
-                                                        Text.literal("\u00a7e[" + bot.getName().getString()
-                                                                + "] \u00a7fI have nothing worth trading right now."),
+                                                        Text.literal("§e[" + bot.getName().getString()
+                                                                + "] §fI have nothing worth trading right now."),
                                                         false);
                                                 return 0;
                                             }
                                             player.sendMessage(
-                                                    Text.literal("\u00a7e[" + bot.getName().getString()
-                                                            + "] \u00a7fI could offer: \u00a7b"
+                                                    Text.literal("§e[" + bot.getName().getString()
+                                                            + "] §fI could offer: §b"
                                                             + TradeEvaluator.displayName(botOffer)
-                                                            + "\u00a7f. Sneak and throw the item you want to give me!"),
+                                                            + "§f. Sneak and throw the item you want to give me!"),
                                                     false);
                                             return 1;
                                         })
@@ -1030,257 +1028,707 @@ public class modCommandRegistry {
                         )
 
                         .then(literal("stopAllMovementTasks")
-                                .then(CommandManager.argument("bot", EntityArgumentType.player())
-                                        .executes(context -> {
+                                .executes(context -> {
 
-                                            ServerPlayerEntity bot = EntityArgumentType.getPlayer(context, "bot");
-                                            MinecraftServer server = bot.getServer();
-                                            assert server != null;
+                                    MinecraftServer server = context.getSource().getServer();
+                                    ServerCommandSource serverSource = server.getCommandSource();
+                                    PathTracer.flushAllMovementTasks();
 
-                                            ServerCommandSource botSource = bot.getCommandSource().withSilent().withMaxLevel(4);
+                                    ChatUtils.sendSystemMessage(serverSource, "Flushed all movement tasks");
 
-                                            stopMoving(server, botSource, bot.getName().getString());
+                                    return 1;
 
-                                            return 1;
-                                        })
-                                )
-
+                                })
                         )
-
         ));
-
-    }
-
-    private static void spawnBot(@NotNull CommandContext<ServerCommandSource> context, String spawnMode) {
-
-        MinecraftServer server = context.getSource().getServer();
-        ServerCommandSource serverSource = server.getCommandSource();
-
-        String botName = StringArgumentType.getString(context, "bot_name");
-
-        if (spawnMode.equals("survival")) {
-
-            server.getCommandManager().executeWithPrefix(serverSource, "/player " + botName + " spawn");
-
-        }
-
-        else if (spawnMode.equals("creative")) {
-
-            server.getCommandManager().executeWithPrefix(serverSource, "/player " + botName + " spawn");
-
-        }
-
-        else {
-            ChatUtils.sendSystemMessage(serverSource, "Invalid mode: " + spawnMode + "! Valid modes are: survival, creative.");
-        }
-
     }
 
 
-    private static void botWalk(@NotNull CommandContext<ServerCommandSource> context) {
-
-        MinecraftServer server = context.getSource().getServer();
-        ServerCommandSource serverSource = server.getCommandSource();
-
-        try {
-            ServerPlayerEntity bot = EntityArgumentType.getPlayer(context, "bot");
-            int till = IntegerArgumentType.getInteger(context, "till");
-
-            ServerCommandSource botSource = bot.getCommandSource().withSilent().withMaxLevel(4);
-
-            botName = bot.getName().getString();
-
-            // Issue continuous-forward movement command; a scheduled stop will cancel it.
-            moveForward(server, botSource, botName);
-
-            scheduler.schedule(new BotStopTask(server, botSource, botName), till * 1000L, TimeUnit.MILLISECONDS);
-
-        } catch (CommandSyntaxException e) {
-            LOGGER.error("Failed to get entity argument: " + e);
-        }
-    }
-
-    private static void botJump(@NotNull CommandContext<ServerCommandSource> context) {
-        MinecraftServer server = context.getSource().getServer();
-
-        try {
-            ServerPlayerEntity bot = EntityArgumentType.getPlayer(context, "bot");
-
-            ServerCommandSource botSource = bot.getCommandSource().withSilent().withMaxLevel(4);
-
-            botName = bot.getName().getString();
-
-            server.getCommandManager().executeWithPrefix(botSource, "/player " + botName + " jump");
-
-        } catch (CommandSyntaxException e) {
-            LOGGER.error("Failed to get entity argument: " + e);
-        }
-    }
-
-    private static void teleportForward(@NotNull CommandContext<ServerCommandSource> context) {
-        MinecraftServer server = context.getSource().getServer();
-
-        try {
-            ServerPlayerEntity bot = EntityArgumentType.getPlayer(context, "bot");
-            ServerCommandSource botSource = bot.getCommandSource().withSilent().withMaxLevel(4);
-
-            botName = bot.getName().getString();
-
-            Vec3d currentPos = bot.getPos();
-            Vec2f rotation = bot.getRotationClient();
-
-            double yawRadians = Math.toRadians(rotation.y);
-
-            double newX = currentPos.x - Math.sin(yawRadians) * 2;
-            double newZ = currentPos.z + Math.cos(yawRadians) * 2;
-
-            server.getCommandManager().executeWithPrefix(botSource, "/tp " + botName + " " + newX + " " + currentPos.y + " " + newZ);
-
-        } catch (CommandSyntaxException e) {
-            LOGGER.error("Failed to get entity argument: " + e);
-        }
-    }
-
-    private static void testChatMessage(@NotNull CommandContext<ServerCommandSource> context) {
-
-        MinecraftServer server = context.getSource().getServer();
-
-        try {
-            ServerPlayerEntity bot = EntityArgumentType.getPlayer(context, "bot");
-
-            ServerCommandSource botSource = bot.getCommandSource().withSilent().withMaxLevel(4);
-
-            ChatUtils.sendChatMessages(botSource, "Hello World!");
-
-        } catch (CommandSyntaxException e) {
-            LOGGER.error("Failed to get entity argument: " + e);
-        }
-
-    }
-
-    private static void botGo(@NotNull CommandContext<ServerCommandSource> context) {
-
-        MinecraftServer server = context.getSource().getServer();
-
-        try {
-            ServerPlayerEntity bot = EntityArgumentType.getPlayer(context, "bot");
-            ServerCommandSource botSource = bot.getCommandSource().withSilent().withMaxLevel(4);
-            BlockPos targetPos = BlockPosArgumentType.getBlockPos(context, "pos");
-            String sprint = StringArgumentType.getString(context, "sprint");
-            botName = bot.getName().getString();
-            boolean shouldSprint = sprint.equals("true");
-
-            // GoTo.goTo() is the only navigation entry-point; run on a virtual thread
-            // so the command dispatcher thread is not blocked.
-            final boolean sprintFinal = shouldSprint;
-            Thread.ofVirtual().name("bot-go-" + botName).start(() -> {
-                try {
-                    GoTo.goTo(botSource, targetPos.getX(), targetPos.getY(), targetPos.getZ(), sprintFinal);
-                } catch (Exception e) {
-                    LOGGER.error("[botGo] Navigation failed for '{}': {}", botName, e.getMessage());
-                }
-            });
-
-        } catch (CommandSyntaxException e) {
-            LOGGER.error("Failed to get entity argument: " + e);
-        }
-
-    }
+    // =========================================================================
+    // /bot stance handler
+    // =========================================================================
 
     /**
      * Handles /bot stance <bot> <mode> [target].
      *
-     * <p>BotStance was redesigned: it no longer uses AGGRESSIVE/DEFENSIVE/PASSIVE
-     * enum constants.  The supported modes now map to the spatial behaviours
-     * exposed by {@link BotStance}: STAY (anchor at current position) and
-     * FOLLOW (follow a named player).  NONE / "clear" releases any active stance.
+     * <p>Modes:
+     * <ul>
+     *   <li><b>stay</b>   — records the bot's current block position as anchor.
+     *       StanceController will re-path back whenever drift > 2.5 blocks.</li>
+     *   <li><b>follow</b> — requires a {@code target} player name argument.
+     *       StanceController will re-path toward the target whenever they
+     *       move > 5 blocks from the last path origin.</li>
+     *   <li><b>cancel</b> — clears the stance, flushes in-flight movement.</li>
+     * </ul>
      *
-     * <pre>
-     *   /bot stance <bot> stay          – anchor to current position
-     *   /bot stance <bot> follow <name> – follow player <name>
-     *   /bot stance <bot> none           – clear stance
-     * </pre>
+     * @param context   the command context
+     * @param hasTarget true when the optional {@code target} argument was supplied
      */
-    private static void botStance(@NotNull CommandContext<ServerCommandSource> context, boolean hasTarget) {
+    private static void botStance(CommandContext<ServerCommandSource> context, boolean hasTarget) {
+        ServerPlayerEntity bot;
         try {
-            ServerPlayerEntity bot = EntityArgumentType.getPlayer(context, "bot");
-            String mode   = StringArgumentType.getString(context, "mode").toLowerCase();
-            String target  = hasTarget ? StringArgumentType.getString(context, "target") : null;
-            String botName = bot.getName().getString();
-
-            switch (mode) {
-                case "stay" -> {
-                    BotStance.setStay(botName, bot.getBlockPos());
-                    ChatUtils.sendSystemMessage(context.getSource(),
-                            "[" + botName + "] stance set to STAY at " + bot.getBlockPos());
-                }
-                case "follow" -> {
-                    if (target == null || target.isBlank()) {
-                        ChatUtils.sendSystemMessage(context.getSource(),
-                                "FOLLOW stance requires a target player name.");
-                        return;
-                    }
-                    BotStance.setFollow(botName, target);
-                    ChatUtils.sendSystemMessage(context.getSource(),
-                            "[" + botName + "] stance set to FOLLOW targeting '" + target + "'");
-                }
-                case "none", "clear" -> {
-                    StanceController.cancelStance(botName);
-                    ChatUtils.sendSystemMessage(context.getSource(),
-                            "[" + botName + "] stance cleared.");
-                }
-                default -> ChatUtils.sendSystemMessage(context.getSource(),
-                        "Invalid stance mode '" + mode + "'. Use: stay, follow, none");
-            }
+            bot = EntityArgumentType.getPlayer(context, "bot");
         } catch (CommandSyntaxException e) {
-            LOGGER.error("Failed to get entity argument: {}", e.getMessage());
+            context.getSource().sendMessage(Text.of("Bot not found!"));
+            return;
+        }
+
+        String mode = StringArgumentType.getString(context, "mode").toLowerCase();
+        String botName = bot.getName().getString();
+        ServerCommandSource cmdSource = context.getSource();
+
+        switch (mode) {
+            case "stay" -> {
+                BlockPos anchor = bot.getBlockPos();
+                BotStance.setStay(botName, anchor);
+                ChatUtils.sendSystemMessage(cmdSource,
+                        botName + " is now in STAY mode. Anchor: " + anchor);
+                LOGGER.info("[stance] {} -> STAY at {}", botName, anchor);
+            }
+
+            case "follow" -> {
+                if (!hasTarget) {
+                    ChatUtils.sendSystemMessage(cmdSource,
+                            "Usage: /bot stance <bot> follow <targetPlayerName>");
+                    return;
+                }
+                String target = StringArgumentType.getString(context, "target");
+                // Validate target exists on the server
+                MinecraftServer server = cmdSource.getServer();
+                if (server.getPlayerManager().getPlayer(target) == null) {
+                    ChatUtils.sendSystemMessage(cmdSource,
+                            "Player '" + target + "' not found on this server.");
+                    return;
+                }
+                BotStance.setFollow(botName, target);
+                ChatUtils.sendSystemMessage(cmdSource,
+                        botName + " is now in FOLLOW mode, shadowing '" + target + "'.");
+                LOGGER.info("[stance] {} -> FOLLOW target='{}'", botName, target);
+            }
+
+            case "cancel" -> {
+                StanceController.cancelStance(botName);
+                ChatUtils.sendSystemMessage(cmdSource,
+                        botName + "'s stance has been cancelled.");
+                LOGGER.info("[stance] {} -> NONE (cancelled)", botName);
+            }
+
+            default -> ChatUtils.sendSystemMessage(cmdSource,
+                    "Unknown stance mode '" + mode + "'. Use: stay | follow | cancel");
         }
     }
 
-    public static void stopMoving(MinecraftServer server, ServerCommandSource botSource, String botName) {
 
-        server.getCommandManager().executeWithPrefix(botSource, "/player " + botName + " stop");
+    private static void spawnBot(CommandContext<ServerCommandSource> context, String spawnMode) {
+        LOGGER.info("========== SPAWNING BOT IN MODE: {} ==========", spawnMode);
+
+        MinecraftServer server = context.getSource().getServer();
+        BlockPos spawnPos = getBlockPos(context);
+
+        RegistryKey<World> dimType = context.getSource().getWorld().getRegistryKey();
+
+        Vec2f facing = context.getSource().getRotation();
+
+        Vec3d pos = new Vec3d(spawnPos.getX(), spawnPos.getY(), spawnPos.getZ());
+
+        GameMode mode = GameMode.SURVIVAL;
+
+        botName = StringArgumentType.getString(context, "bot_name");
+
+        ServerCommandSource serverSource = server.getCommandSource();
+
+
+        if (spawnMode.equals("training")) {
+
+            createFakePlayer.createFake(
+                    botName,
+                    server,
+                    pos,
+                    facing.y,
+                    facing.x,
+                    dimType,
+                    mode,
+                    false
+            );
+
+            isTrainingMode = true;
+
+            LOGGER.info("Spawned new bot {}!", botName);
+
+            ServerPlayerEntity bot = server.getPlayerManager().getPlayer(botName);
+
+            if (bot!=null) {
+
+                Objects.requireNonNull(bot.getAttributeInstance(EntityAttributes.GENERIC_KNOCKBACK_RESISTANCE)).setBaseValue(0.0);
+
+                RespawnHandler.registerRespawnListener(bot);
+
+                AutoFaceEntity.startAutoFace(bot);
+
+            }
+
+            else {
+                ChatUtils.sendSystemMessage(serverSource, "Error: " + botName + " cannot be spawned");
+            }
+
+        } else if (spawnMode.equals("play")) {
+
+            createFakePlayer.createFake(
+                    botName,
+                    server,
+                    pos,
+                    facing.y,
+                    facing.x,
+                    dimType,
+                    mode,
+                    false
+            );
+
+            LOGGER.info("Spawned new bot {}!", botName);
+
+            ServerPlayerEntity bot = server.getPlayerManager().getPlayer(botName);
+
+            System.out.println("Preparing for connection to language model....");
+
+            if (bot!=null) {
+
+                Objects.requireNonNull(bot.getAttributeInstance(EntityAttributes.GENERIC_KNOCKBACK_RESISTANCE)).setBaseValue(0.0);
+
+                System.out.println("Registering respawn listener....");
+
+                RespawnHandler.registerRespawnListener(bot);
+
+                ollamaClient.botName = botName;
+
+                System.out.println("Set bot's username to " + botName);
+
+                String llmProvider = System.getProperty("aiplayer.llmMode", "ollama");
+
+                System.out.println("Using provider");
+
+                switch (llmProvider) {
+                    case "openai", "gpt", "google", "gemini", "anthropic", "claude", "xAI", "xai", "grok", "custom":
+                        LLMClient llmClient = LLMClientFactory.createClient(llmProvider);
+                        assert llmClient != null;
+
+                        ChatUtils.sendSystemMessage(serverSource, "Please wait while " + botName + " connects to " + llmClient.getProvider() + "'s servers.");
+                        LLMServiceHandler.sendInitialResponse(bot.getCommandSource().withSilent().withMaxLevel(4), llmClient);
+
+                        new Thread(() -> {
+                            LOGGER.info("Waiting for LLM Service Handler to initialize...");
+                            int waitCount = 0;
+                            while (!LLMServiceHandler.isInitialized) {
+                                try {
+                                    Thread.sleep(500L);
+                                    waitCount++;
+                                    if (waitCount % 10 == 0) {
+                                        LOGGER.warn("Still waiting for LLM initialization... ({} seconds)", waitCount / 2);
+                                    }
+                                    if (waitCount > 60) {
+                                        LOGGER.error("LLM initialization timeout! Starting AutoFace anyway.");
+                                        AutoFaceEntity.startAutoFace(bot);
+                                        Thread.currentThread().interrupt();
+                                        return;
+                                    }
+                                } catch (InterruptedException e) {
+                                    LOGGER.error("LLM client initialization interrupted.");
+                                    Thread.currentThread().interrupt();
+                                    break;
+                                }
+                            }
+
+                            LOGGER.info("LLM Service Handler initialized! Starting AutoFace...");
+                            AutoFaceEntity.startAutoFace(bot);
+
+                            Thread.currentThread().interrupt();
+
+                        }).start();
+
+                        break;
+
+                    case "ollama":
+                        ChatUtils.sendSystemMessage(serverSource, "Please wait while " + botName + " connects to the language model.");
+                        ollamaClient.initializeOllamaClient();
+
+                        new Thread(() -> {
+                            LOGGER.info("Waiting for Ollama client to initialize...");
+                            int waitCount = 0;
+                            while (!ollamaClient.isInitialized) {
+                                try {
+                                    Thread.sleep(500L);
+                                    waitCount++;
+                                    if (waitCount % 10 == 0) {
+                                        LOGGER.warn("Still waiting for Ollama initialization... ({} seconds)", waitCount / 2);
+                                    }
+                                    if (waitCount > 60) {
+                                        LOGGER.error("Ollama initialization timeout! Starting AutoFace anyway.");
+                                        AutoFaceEntity.startAutoFace(bot);
+                                        Thread.currentThread().interrupt();
+                                        return;
+                                    }
+                                } catch (InterruptedException e) {
+                                    LOGGER.error("Ollama client initialization interrupted.");
+                                    Thread.currentThread().interrupt();
+                                    break;
+                                }
+                            }
+
+                            LOGGER.info("Ollama client initialized! Starting AutoFace...");
+                            ollamaClient.sendInitialResponse(bot.getCommandSource().withSilent().withMaxLevel(4));
+                            AutoFaceEntity.startAutoFace(bot);
+
+                            Thread.currentThread().interrupt();
+
+                        }).start();
+
+                        break;
+
+                    default:
+                        LOGGER.warn("Unsupported provider detected. Defaulting to Ollama client");
+                        ChatUtils.sendSystemMessage(serverSource, "Warning! Unsupported provider detected. Defaulting to Ollama client");
+                        ChatUtils.sendSystemMessage(serverSource, "Please wait while " + botName + " connects to the language model.");
+                        ollamaClient.initializeOllamaClient();
+
+                        new Thread(() -> {
+                            while (!ollamaClient.isInitialized) {
+                                try {
+                                    Thread.sleep(500L);
+                                } catch (InterruptedException e) {
+                                    LOGGER.error("Ollama client initialization interrupted.");
+                                    Thread.currentThread().interrupt();
+                                    break;
+                                }
+                            }
+
+                            ollamaClient.sendInitialResponse(bot.getCommandSource().withSilent().withMaxLevel(4));
+                            AutoFaceEntity.startAutoFace(bot);
+
+                            Thread.currentThread().interrupt();
+
+                        }).start();
+
+                        break;
+
+                }
+
+            }
+
+
+            else {
+                ChatUtils.sendSystemMessage(serverSource, "Error: " + botName + " cannot be spawned");
+            }
+
+        }
+        else {
+            ChatUtils.sendSystemMessage(serverSource, "Invalid spawn mode!");
+            ChatUtils.sendSystemMessage(serverSource, "Usage: /bot spawn <your bot's name> <spawnMode: training or play>");
+        }
+
 
     }
 
-    private static Entity selectHighestThreatTarget(ServerPlayerEntity bot, List<Entity> hostileEntities,
-                                                     boolean debugMode, ServerCommandSource botSource) {
-        if (hostileEntities.isEmpty()) return null;
-        if (hostileEntities.size() == 1) return hostileEntities.get(0);
+    private static void notImplementedMessage(CommandContext<ServerCommandSource> context) {
 
-        Entity highestThreatTarget = null;
-        double highestThreatScore = -1;
+        MinecraftServer server = context.getSource().getServer();
+
+        String botName = StringArgumentType.getString(context, "bot_name");
+
+        ServerPlayerEntity bot = server.getPlayerManager().getPlayer(botName);
+
+        if (bot == null) {
+
+            context.getSource().sendMessage(Text.of("The requested bot could not be found on the server!"));
+            server.sendMessage(Text.literal("Error! Bot not found!"));
+            LOGGER.error("The requested bot could not be found on the server!");
+
+        }
+
+        else {
+
+            ServerCommandSource botSource = bot.getCommandSource().withLevel(2).withSilent().withMaxLevel(4);
+
+            server.getCommandManager().executeWithPrefix(botSource, "/say \u00a7cThis command has not been implemented yet and is a work in progress! ");
+
+
+        }
+
+
+    }
+
+    private static void teleportForward(CommandContext<ServerCommandSource> context) {
+        MinecraftServer server = context.getSource().getServer();
+
+        ServerPlayerEntity bot = null;
+        try {bot = EntityArgumentType.getPlayer(context, "bot");} catch (CommandSyntaxException ignored) {}
+
+        if (bot == null) {
+
+            context.getSource().sendMessage(Text.of("The requested bot could not be found on the server!"));
+            server.sendMessage(Text.literal("Error! Bot not found!"));
+            LOGGER.error("The requested bot could not be found on the server!");
+
+        }
+
+        else {
+            String botName = bot.getName().getLiteralString();
+
+            BlockPos currentPosition = bot.getBlockPos();
+            BlockPos newPosition = currentPosition.add(1, 0, 0);
+            bot.teleport(bot.getServerWorld(), newPosition.getX(), newPosition.getY(), newPosition.getZ(), Set.of(), bot.getYaw(), bot.getPitch());
+
+            LOGGER.info("Teleported {} 1 positive block ahead", botName);
+
+        }
+
+    }
+
+    private static void botWalk(CommandContext<ServerCommandSource> context) {
+
+        MinecraftServer server = context.getSource().getServer();
+
+        ServerPlayerEntity bot = null;
+        try {bot = EntityArgumentType.getPlayer(context, "bot");} catch (CommandSyntaxException ignored) {}
+
+        int travelTime = IntegerArgumentType.getInteger(context, "till");
+
+
+        if (bot == null) {
+
+            context.getSource().sendMessage(Text.of("The requested bot could not be found on the server!"));
+            server.sendMessage(Text.literal("Error! Bot not found!"));
+            LOGGER.error("The requested bot could not be found on the server!");
+
+        }
+
+        else {
+
+            String botName = bot.getName().getLiteralString();
+
+            ServerCommandSource botSource = bot.getCommandSource().withLevel(2).withSilent().withMaxLevel(4);
+            moveForward(server, botSource, botName);
+
+            scheduler.schedule(new BotStopTask(server, botSource, botName), travelTime, TimeUnit.SECONDS);
+
+
+        }
+
+    }
+
+
+    private static void botJump(CommandContext<ServerCommandSource> context) {
+
+        MinecraftServer server = context.getSource().getServer();
+
+        ServerPlayerEntity bot = null;
+        try {bot = EntityArgumentType.getPlayer(context, "bot");} catch (CommandSyntaxException ignored) {}
+
+
+        if (bot == null) {
+
+            context.getSource().sendMessage(Text.of("The requested bot could not be found on the server!"));
+            server.sendMessage(Text.literal("Error! Bot not found!"));
+            LOGGER.error("The requested bot could not be found on the server!");
+
+        }
+
+        else {
+
+            String botName = bot.getName().getLiteralString();
+
+            bot.jump();
+
+            LOGGER.info("{} jumped!", botName);
+
+        }
+
+    }
+
+    private static void testChatMessage(CommandContext<ServerCommandSource> context) {
+
+        String response = "I am doing great! It feels good to be able to chat with you again after a long time. So, how have you been doing? Are you enjoying the game world and having fun playing Minecraft with me? Let's continue chatting about whatever topic comes to mind! I love hearing from you guys and seeing your creations in the game. Don't hesitate to share anything with me, whether it's an idea, a problem, or simply something that makes you laugh. Cheers!";
+
+        MinecraftServer server = context.getSource().getServer();
+
+        ServerPlayerEntity bot = null;
+        try {bot = EntityArgumentType.getPlayer(context, "bot");} catch (CommandSyntaxException ignored) {}
+
+        if (bot != null) {
+
+            ServerCommandSource botSource = bot.getCommandSource().withMaxLevel(4).withSilent();
+            ChatUtils.sendChatMessages(botSource, response);
+
+        }
+        else {
+            context.getSource().sendMessage(Text.of("The requested bot could not be found on the server!"));
+            server.sendMessage(Text.literal("Error! Bot not found!"));
+            LOGGER.error("The requested bot could not be found on the server!");
+
+        }
+
+    }
+
+    private static void botGo(CommandContext<ServerCommandSource> context) {
+        MinecraftServer server = context.getSource().getServer();
+        BlockPos position = BlockPosArgumentType.getBlockPos(context, "pos");
+        String sprintFlag = StringArgumentType.getString(context, "sprint");
+
+        boolean sprint;
+
+        if (sprintFlag.equalsIgnoreCase("true")) {
+            sprint = true;
+        }
+        else if (sprintFlag.equalsIgnoreCase("false")) {
+            sprint = false;
+        }
+        else {
+            sprint = false;
+            ChatUtils.sendChatMessages(server.getCommandSource(), "Wrong argument! Command is as follows: /bot go_to <botName> <xyz> <true/false (case insensitive)>");
+        }
+
+        int x_distance = position.getX();
+        int y_distance = position.getY();
+        int z_distance = position.getZ();
+
+        ServerWorld world = server.getOverworld();
+
+        ServerPlayerEntity bot = null;
+        try {
+            bot = EntityArgumentType.getPlayer(context, "bot");
+        } catch (CommandSyntaxException ignored) {}
+
+        if (bot == null) {
+            context.getSource().sendMessage(Text.of("The requested bot could not be found on the server!"));
+            server.sendMessage(Text.literal("Error! Bot not found!"));
+            LOGGER.error("The requested bot could not be found on the server!");
+            return;
+        }
+
+        String botName = bot.getName().getLiteralString();
+        ServerCommandSource botSource = bot.getCommandSource().withLevel(2).withSilent().withMaxLevel(4);
+
+        server.sendMessage(Text.literal("Finding the shortest path to the target, please wait patiently if the game seems hung"));
+
+        ServerPlayerEntity finalBot = bot;
+
+        server.execute(() -> {
+            List<PathFinder.PathNode> rawPath = PathFinder.calculatePath(finalBot.getBlockPos(), new BlockPos(x_distance, y_distance, z_distance), world);
+
+            List<PathFinder.PathNode> finalPath = PathFinder.simplifyPath(rawPath, world);
+
+            LOGGER.info("Path output: {}", finalPath);
+
+            Queue<Segment> segments = convertPathToSegments(finalPath, sprint);
+
+            LOGGER.info("Generated segments: {}", segments);
+
+            PathTracer.tracePath(server, botSource, botName, segments, sprint);
+
+        });
+    }
+
+
+
+
+    public static void moveForward(MinecraftServer server, ServerCommandSource source, String botName) {
+
+        if (source.getPlayer() != null) {
+
+            server.getCommandManager().executeWithPrefix(source, "/player " + botName + " move forward");
+
+        }
+
+    }
+
+    private static void moveBackward(MinecraftServer server, ServerCommandSource source, String botName) {
+
+        if (source.getPlayer() != null) {
+
+            server.getCommandManager().executeWithPrefix(source, "/player " + botName + " move backward");
+
+        }
+
+
+    }
+
+    public static void stopMoving(MinecraftServer server, ServerCommandSource source, String botName) {
+
+        if (source.getPlayer() != null) {
+
+            server.getCommandManager().executeWithPrefix(source, "/player " + botName + " stop");
+
+        }
+
+
+    }
+
+    private static void moveLeft(MinecraftServer server, ServerCommandSource source, String botName) {
+
+        if (source.getPlayer() != null) {
+
+            server.getCommandManager().executeWithPrefix(source, "/player " + botName + " move left");
+
+        }
+
+    }
+
+    private static void moveRight(MinecraftServer server, ServerCommandSource source, String botName) {
+
+        if (source.getPlayer() != null) {
+
+            server.getCommandManager().executeWithPrefix(source, "/player " + botName + " move right");
+
+        }
+
+    }
+
+
+    private static @NotNull BlockPos getBlockPos(CommandContext<ServerCommandSource> context) {
+        ServerPlayerEntity player = context.getSource().getPlayer();
+
+
+        assert player != null;
+        return new BlockPos((int) player.getX() + 5, (int) player.getY(), (int) player.getZ());
+    }
+
+    /**
+     * Intelligently selects the highest threat target from a list of hostile entities.
+     */
+    private static Entity selectHighestThreatTarget(ServerPlayerEntity bot, List<Entity> hostileEntities, boolean debugMode, ServerCommandSource botSource) {
+        if (hostileEntities.isEmpty()) {
+            return null;
+        }
+
+        Entity highestThreatEntity = null;
+        double highestThreat = -1.0;
 
         for (Entity entity : hostileEntities) {
-            double threatScore = 0;
+            double distance = Math.sqrt(entity.squaredDistanceTo(bot));
 
-            // Base distance threat (closer = higher threat)
-            double distance = bot.getPos().distanceTo(entity.getPos());
-            threatScore += Math.max(0, 40 - distance) / 40.0 * 50;
-
-            // Entity type threat multiplier
-            if (entity instanceof HostileEntity hostile) {
-                // Health factor (lower health = easier to kill = higher priority)
-                double healthRatio = hostile.getHealth() / hostile.getMaxHealth();
-                threatScore += (1 - healthRatio) * 20;
-
-                // Armor factor — EntityAttributes.GENERIC_ARMOR is the 1.21.1 registry key
-                double armorValue = hostile.getAttributeValue(EntityAttributes.GENERIC_ARMOR);
-                threatScore -= armorValue * 0.5;
+            double baseThreat;
+            if (entity instanceof net.minecraft.entity.player.PlayerEntity player) {
+                baseThreat = net.shasankp000.PlayerUtils.PlayerRetaliationTracker.getPlayerThreatLevel(bot, player);
+            } else {
+                baseThreat = calculateBaseThreatForEntity(entity, distance);
             }
 
-            if (debugMode && botSource != null) {
-                ChatUtils.sendChatMessages(botSource,
-                    "Entity: " + entity.getName().getString() + " | Threat Score: " + String.format("%.1f", threatScore));
+            double distanceModifier = 0.0;
+            String entityType = entity.getName().getString().toLowerCase();
+
+            if (entityType.contains("creeper")) {
+                if (distance < 3.0) distanceModifier = 50.0;
+                else if (distance < 5.0) distanceModifier = 30.0;
+                else if (distance < 8.0) distanceModifier = 10.0;
+                else distanceModifier = -10.0;
+            } else if (entityType.contains("skeleton") || entityType.contains("witch") ||
+                     entityType.contains("blaze") || entityType.contains("pillager") ||
+                     (entity instanceof net.minecraft.entity.player.PlayerEntity)) {
+                if (distance < 3.0) distanceModifier = 5.0;
+                else if (distance < 8.0) distanceModifier = 10.0;
+                else if (distance < 15.0) distanceModifier = 5.0;
+                else if (distance < 25.0) distanceModifier = 0.0;
+                else distanceModifier = -8.0;
+            } else {
+                if (distance < 2.0) distanceModifier = 15.0;
+                else if (distance < 4.0) distanceModifier = 10.0;
+                else if (distance < 6.0) distanceModifier = 5.0;
+                else if (distance < 10.0) distanceModifier = 0.0;
+                else if (distance < 20.0) distanceModifier = -5.0;
+                else distanceModifier = -10.0;
             }
 
-            if (threatScore > highestThreatScore) {
-                highestThreatScore = threatScore;
-                highestThreatTarget = entity;
+            double totalThreat = baseThreat + distanceModifier;
+
+            if (debugMode) {
+                String entityCategory = entity instanceof net.minecraft.entity.player.PlayerEntity ? "HOSTILE PLAYER" : "MOB";
+                LOGGER.info("Target analysis: {} ({}) at {}m - Base: {}, Distance modifier: {}, Total: {}",
+                    entity.getName().getString(), entityCategory,
+                    String.format("%.1f", distance), String.format("%.1f", baseThreat),
+                    String.format("%.1f", distanceModifier), String.format("%.1f", totalThreat));
+            }
+
+            if (totalThreat > highestThreat) {
+                highestThreat = totalThreat;
+                highestThreatEntity = entity;
             }
         }
 
-        return highestThreatTarget;
+        if (highestThreatEntity != null && debugMode) {
+            String targetName = highestThreatEntity.getName().getString();
+            double distance = Math.sqrt(highestThreatEntity.squaredDistanceTo(bot));
+
+            ChatUtils.sendChatMessages(botSource,
+                String.format("\u00a7c\u2694 Priority Target: \u00a7e%s \u00a77(Threat: \u00a7c%.1f\u00a77, Distance: \u00a7e%.1fm\u00a77)",
+                    targetName, highestThreat, distance));
+
+            if (hostileEntities.size() > 1) {
+                String reason = getTargetSelectionReason(highestThreatEntity, distance);
+                ChatUtils.sendChatMessages(botSource, "\u00a77Reason: " + reason);
+            }
+        }
+
+        return highestThreatEntity;
+    }
+
+    private static double calculateBaseThreatForEntity(Entity entity, double distance) {
+        String entityType = entity.getName().getString().toLowerCase();
+        double baseThreat = 5.0;
+
+        if (entityType.contains("creeper")) {
+            baseThreat = 50.0;
+            if (distance <= 3.0) baseThreat += 30.0;
+        } else if (entityType.contains("warden")) {
+            baseThreat = 100.0;
+        } else if (entityType.contains("ravager")) {
+            baseThreat = 40.0;
+        } else if (entityType.contains("skeleton") || entityType.contains("stray")) {
+            baseThreat = 20.0;
+        } else if (entityType.contains("witch")) {
+            baseThreat = 25.0;
+        } else if (entityType.contains("blaze")) {
+            baseThreat = 30.0;
+        } else if (entityType.contains("ghast")) {
+            baseThreat = 35.0;
+        } else if (entityType.contains("drowned") && distance > 5.0) {
+            baseThreat = 15.0;
+        } else if (entityType.contains("pillager")) {
+            baseThreat = 18.0;
+        } else if (entityType.contains("phantom")) {
+            baseThreat = 22.0;
+        } else if (entityType.contains("zombie") || entityType.contains("husk")) {
+            baseThreat = 8.0;
+        } else if (entityType.contains("spider") || entityType.contains("cave_spider")) {
+            baseThreat = 12.0;
+        } else if (entityType.contains("enderman")) {
+            baseThreat = 15.0;
+        } else if (entityType.contains("vindicator")) {
+            baseThreat = 25.0;
+        } else if (entityType.contains("piglin")) {
+            baseThreat = 10.0;
+        } else if (entityType.contains("slime") || entityType.contains("magma_cube")) {
+            baseThreat = 6.0;
+        } else if (entityType.contains("silverfish")) {
+            baseThreat = 4.0;
+        }
+
+        return baseThreat;
+    }
+
+    private static String getTargetSelectionReason(Entity entity, double distance) {
+        if (entity instanceof net.minecraft.entity.player.PlayerEntity) {
+            return "\u00a74Hostile player - armed and dangerous!";
+        }
+
+        String entityType = entity.getName().getString().toLowerCase();
+
+        if (entityType.contains("creeper")) return "\u00a7cExplosive threat - must eliminate immediately!";
+        if (entityType.contains("skeleton") || entityType.contains("witch") ||
+            entityType.contains("blaze") || entityType.contains("ghast")) return "\u00a76Ranged attacker - dangerous at distance";
+        if (entityType.contains("phantom")) return "\u00a7bAerial threat - difficult to evade";
+        if (entityType.contains("warden") || entityType.contains("ravager")) return "\u00a74Extremely dangerous - maximum threat";
+        if (distance < 3.0) return "\u00a7eImmediate danger - very close proximity";
+        if (distance < 6.0) return "\u00a7eClose range threat";
+
+        return "\u00a77Highest calculated threat";
     }
 
 }
