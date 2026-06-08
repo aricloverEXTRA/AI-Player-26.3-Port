@@ -30,7 +30,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 @Mixin(PlayerEntity.class)
 public class PlayerPickupMixin {
 
-    @Inject(method = "pickUpItem", at = @At("HEAD"), cancellable = true)
+    @Inject(method = "pickUpItem(Lnet/minecraft/entity/ItemEntity;I)V", at = @At("HEAD"), cancellable = true)
     private void aiPlayer_onPickupItem(ItemEntity itemEntity, int count, CallbackInfo ci) {
         // TradeListener gets first priority — it returns true only in Phase 2
         // when it has consumed the confirmation throw item itself.
