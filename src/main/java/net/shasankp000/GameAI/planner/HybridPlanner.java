@@ -127,21 +127,16 @@ public class HybridPlanner {
             LOGGER.info("[HybridPlanner] Executing plan with {} step(s) for goal '{}'",
                     plan.steps.size(), goalText);
 
-            // 4. Execute each step in sequence
-            // FIX: plan.getSteps() → plan.steps
-            //      step.getStepIndex() does not exist → use loop index (i+1)
-            //      step.getActionName() → step.actionName  (public field)
-            //      step.getParameters() → step.params      (public field)
-            //      BotEventHandler.executeStep() does not exist → FunctionCallerV2.dispatchPlannedStep()
-            for (int i = 0; i < plan.steps.size(); i++) {
-                if (Thread.currentThread().isInterrupted()) {
-                    LOGGER.info("[HybridPlanner] Execution interrupted -- aborting plan for '{}'", goalText);
-                    break;
-                }
-                PlannedStep step = plan.steps.get(i);
-                LOGGER.debug("[HybridPlanner] Step {} -- action='{}', params='{}'",
-                        (i + 1), step.actionName, step.params);
-                net.shasankp000.FunctionCaller.FunctionCallerV2.dispatchPlannedStep(bot, step);
+            new net.shasankp000.FunctionCaller.FunctionCallerV2(
+                    bot.getCommandSource().withSilent().withMaxLevel(4),
+                    bot.getUuid());
+            boolean executed = net.shasankp000.FunctionCaller.FunctionCallerV2
+                    .executePlan(plan, null, currentState)
+                    .join();
+
+            if (!executed) {
+                LOGGER.warn("[HybridPlanner] Plan execution failed for goal '{}'", goalText);
+                return;
             }
 
             LOGGER.info("[HybridPlanner] Plan complete for goal '{}'", goalText);

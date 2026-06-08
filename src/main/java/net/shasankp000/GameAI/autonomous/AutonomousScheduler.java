@@ -27,13 +27,13 @@ public class AutonomousScheduler {
     private final AutonomousGoalEngine engine;
     private final String               botName;
 
-    private final ScheduledExecutorService scheduler =
-            Executors.newScheduledThreadPool(1,
-                    r -> Thread.ofVirtual().name("autonomous-scheduler-" + botName).unstarted(r));
+    private final ScheduledExecutorService scheduler;
 
     public AutonomousScheduler(AutonomousGoalEngine engine, String botName) {
         this.engine  = engine;
         this.botName = botName;
+        this.scheduler = Executors.newScheduledThreadPool(1,
+                r -> Thread.ofVirtual().name("autonomous-scheduler-" + botName).unstarted(r));
     }
 
     /** Start all periodic tasks. */

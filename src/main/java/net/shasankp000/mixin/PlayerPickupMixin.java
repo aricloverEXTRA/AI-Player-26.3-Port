@@ -10,7 +10,7 @@ import org.spongepowered.asm.mixin.injection.Inject;
 import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
 
 /**
- * Intercepts {@link PlayerEntity#pickUpItem(ItemEntity, int)} to power both
+ * Intercepts {@link ItemEntity#onPlayerCollision(PlayerEntity)} to power both
  * Feature 4 (smart item handoff) and Feature 7 (sneak-throw trade system).
  *
  * <p>{@code PlayerPickupItemCallback} was removed from Fabric API before
@@ -27,19 +27,21 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfo;
  *       Handles normal bot item-handoff reactions.</li>
  * </ol>
  */
-@Mixin(PlayerEntity.class)
+@Mixin(ItemEntity.class)
 public class PlayerPickupMixin {
 
-    @Inject(method = "pickUpItem(Lnet/minecraft/entity/ItemEntity;I)V", at = @At("HEAD"), cancellable = true)
-    private void aiPlayer_onPickupItem(ItemEntity itemEntity, int count, CallbackInfo ci) {
+    @Inject(method = "onPlayerCollision(Lnet/minecraft/entity/player/PlayerEntity;)V", at = @At("HEAD"), cancellable = true)
+    private void aiPlayer_onPlayerCollision(PlayerEntity player, CallbackInfo ci) {
+        ItemEntity itemEntity = (ItemEntity)(Object)this;
+
         // TradeListener gets first priority — it returns true only in Phase 2
         // when it has consumed the confirmation throw item itself.
-        boolean consumed = TradeListener.dispatch((PlayerEntity)(Object)this, itemEntity);
+        boolean consumed = TradeListener.dispatch(player, itemEntity);
         if (consumed) {
             ci.cancel();
             return;
         }
         // ItemHandoffListener runs second for non-trade pickups by the bot.
-        ItemHandoffListener.dispatch((PlayerEntity)(Object)this, itemEntity);
+        ItemHandoffListener.dispatch(player, itemEntity);
     }
 }
