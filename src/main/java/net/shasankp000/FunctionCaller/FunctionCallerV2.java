@@ -102,7 +102,7 @@ public class FunctionCallerV2 {
 
     private static UUID playerUUID;
 
-    private static final Pattern THINK_BLOCK = Pattern.compile("([\\s\\S]*?)", Pattern.DOTALL);
+    private static final Pattern THINK_BLOCK = Pattern.compile("<think>([\\s\\S]*?)</think>", Pattern.DOTALL);
 
     private static final String selectedLM = AIPlayer.CONFIG.getSelectedLanguageModel();
 
@@ -1014,7 +1014,7 @@ public class FunctionCallerV2 {
     private static String stripThinkBlock(String response) {
         Matcher matcher = THINK_BLOCK.matcher(response);
         if (matcher.find()) {
-            return response.replace(matcher.group(0), "").trim(); // Strip the full ...
+            return response.replace(matcher.group(0), "").trim(); // Strip the full <think>...</think>
         }
         return response.trim();
     }
@@ -1383,6 +1383,7 @@ public class FunctionCallerV2 {
 
                     String botContext = buildLLMBotContext(initialState, sharedState, surroundings);
                     String fullSystemPrompt = systemPrompt + "\n\nBot's context information:\n" + botContext;
+
                     String llmResponse = client.sendPrompt(fullSystemPrompt, newPrompt);
                     logger.info("Raw LLM response: {}", llmResponse);
                     String cleanedResponse = stripThinkBlock(llmResponse);
@@ -1412,32 +1413,29 @@ public class FunctionCallerV2 {
                         break;
                     }
                 } catch (Exception e) {
-                    logger.error("❌ Error in LLM fallback after unresolved parameters: {}", e.getMessage());
+                    logger.error("❌ Error in LLM fallback after unresolved parameters: {}", e.getMessage(), e);
                     retryCount++;
                     continue;
                 }
             }
 
-            logger.info("Running function: " + functionName + " with " + paramMap);
+            logger.info("Running function: {} with {}", functionName, paramMap);
             callFunction(functionName, paramMap, sharedState).join();
             logger.info("Function output: {}", functionOutput);
             parseOutputValues(functionName, functionOutput);
 
-            // Short wait for state to settle (e.g., for movement tools)
             try {
                 Thread.sleep(100);
             } catch (InterruptedException e) {
                 logger.warn("Interrupted during state settle wait");
             }
 
-            // Get bot entity
             ServerPlayerEntity bot = botSource.getPlayer();
             if (bot == null) {
                 logger.error("Bot entity not found for verification");
                 continue;
             }
 
-            // Use state-based verifier
             ToolVerifiers.StateVerifier verifier = ToolVerifiers.VERIFIER_REGISTRY.get(functionName);
             ToolVerifiers.VerificationResult result = (verifier == null)
                     ? new ToolVerifiers.VerificationResult(true, null)
@@ -1461,13 +1459,13 @@ public class FunctionCallerV2 {
                     State initialState = BotEventHandler.createInitialState(botSource.getPlayer());
                     InternalMap map = new InternalMap(botSource.getPlayer(), 1, 1);
                     map.updateMap();
-                    // If method returns Map<String, String>
                     Map<String, String> surroundingsStr = map.summarizeSurroundings();
                     Map<String, Object> surroundings = new HashMap<>();
                     surroundings.putAll(surroundingsStr);
 
                     String botContext = buildLLMBotContext(initialState, sharedState, surroundings);
                     String fullSystemPrompt = systemPrompt + "\n\nBot's context information:\n" + botContext;
+
                     String llmResponse = client.sendPrompt(fullSystemPrompt, newPrompt);
                     logger.info("Raw LLM response: {}", llmResponse);
                     String cleanedResponse = stripThinkBlock(llmResponse);
@@ -2171,10 +2169,10 @@ public class FunctionCallerV2 {
      */
     private static Map<String, String> convertStepToParams(PlannedStep step) {
         Map<String, String> params = new HashMap<>();
-        
+
         // Map action to parameters based on action name
         String actionName = step.actionName.toLowerCase();
-        
+
         // Parse params string into array (comma-separated or JSON array)
         String[] paramArray = new String[0];
         if (step.params != null && !step.params.trim().isEmpty()) {
@@ -2208,7 +2206,7 @@ public class FunctionCallerV2 {
                     params.put("sprint", paramArray.length >= 4 ? paramArray[3] : "true");
                 }
                 break;
-                
+
             case "mineblock":
             case "breakblock":
                 if (paramArray.length >= 3) {
@@ -2217,7 +2215,7 @@ public class FunctionCallerV2 {
                     params.put("targetZ", paramArray[2]);
                 }
                 break;
-                
+
             case "placeblock":
                 if (paramArray.length >= 4) {
                     params.put("targetX", paramArray[0]);
@@ -2228,13 +2226,13 @@ public class FunctionCallerV2 {
                     params.put("blockType", paramArray[0]);
                 }
                 break;
-                
+
             case "detectblocks":
                 if (paramArray.length >= 1) {
                     params.put("blockType", paramArray[0]);
                 }
                 break;
-                
+
             case "searchblocks":
                 if (paramArray.length >= 4) {
                     params.put("blockType", paramArray[0]);
@@ -2257,7 +2255,7 @@ public class FunctionCallerV2 {
                     params.put("direction", "left"); // Default
                 }
                 break;
-                
+
             case "look":
                 if (paramArray.length >= 1) {
                     params.put("cardinalDirection", paramArray[0]);
@@ -2265,13 +2263,13 @@ public class FunctionCallerV2 {
                     params.put("cardinalDirection", "north"); // Default
                 }
                 break;
-                
+
             case "websearch":
                 if (paramArray.length >= 1) {
                     params.put("query", paramArray[0]);
                 }
                 break;
-                
+
             // Actions with no parameters (handled by bot commands)
             case "eat":
             case "attack":
@@ -2284,13 +2282,13 @@ public class FunctionCallerV2 {
             case "getoxygenlevel":
                 // No parameters needed - these are simple bot commands
                 break;
-                
+
             default:
                 // If action not recognized, log warning but don't fail
                 // The action might still be valid in the function caller
                 logger.debug("No parameter mapping for action: {}", actionName);
         }
-        
+
         return params;
     }
 

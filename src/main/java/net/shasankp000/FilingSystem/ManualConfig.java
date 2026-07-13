@@ -30,7 +30,7 @@ public class ManualConfig {
     // Use a static method to get the correct, dynamically-resolved file path
     private static final String FILE_PATH = getFilePath();
 
-    // --- Configuration fields (same as before) ---
+    // --- Configuration fields ---
     private List<String> modelList = new ArrayList<>();
     private String selectedLanguageModel;
     private String llmMode = System.getProperty("aiplayer.llmMode", "ollama");
@@ -41,6 +41,25 @@ public class ManualConfig {
     private String customApiKey = "";
     private String customApiUrl = "";
     private Map<String, String> botGameProfile = new HashMap<>();
+
+    /**
+     * Persists the active persona ID for each bot, keyed by bot name.
+     *
+     * <p>Written by {@code /bot persona <bot> <id>} and read on bot spawn so
+     * the chosen personality survives server restarts.  Values are validated
+     * against {@link net.shasankp000.GameAI.persona.PersonaRegistry} at read
+     * time; unknown IDs fall back to
+     * {@link net.shasankp000.GameAI.persona.PersonaRegistry#DEFAULT_ID}.
+     *
+     * <p>Example JSON representation:
+     * <pre>
+     * "botPersonaMap": {
+     *   "Steve": "serious",
+     *   "Alex":  "cheerful"
+     * }
+     * </pre>
+     */
+    private Map<String, String> botPersonaMap = new HashMap<>();
 
     /**
      * Private constructor to prevent direct instantiation.
@@ -196,6 +215,10 @@ public class ManualConfig {
             // After loading, ensure the model list is updated.
             String currentProvider = System.getProperty("aiplayer.llmMode", "ollama");
             loadedConfig.checkAndUpdateProvider(currentProvider);
+            // Ensure the persona map is non-null after deserialisation
+            if (loadedConfig.botPersonaMap == null) {
+                loadedConfig.botPersonaMap = new HashMap<>();
+            }
             return loadedConfig;
         } catch (IOException e) {
             LOGGER.error("Failed to load config file. Using default config.", e);
@@ -218,7 +241,8 @@ public class ManualConfig {
         }
     }
 
-    // --- Getters and setters (same as before) ---
+    // --- Getters and setters ---
+
     public String getOpenAIKey() {
         return openAIKey;
     }
@@ -293,5 +317,48 @@ public class ManualConfig {
 
     public void setBotGameProfile(Map<String, String> botGameProfile) {
         this.botGameProfile = botGameProfile;
+    }
+
+    // --- Persona map ---
+
+    /**
+     * Returns the full persona map (bot name → persona ID).
+     * Callers should prefer {@link #getBotPersona(String)} for single-bot lookups.
+     */
+    public Map<String, String> getBotPersonaMap() {
+        return botPersonaMap;
+    }
+
+    public void setBotPersonaMap(Map<String, String> botPersonaMap) {
+        this.botPersonaMap = botPersonaMap != null ? botPersonaMap : new HashMap<>();
+    }
+
+    /**
+     * Returns the saved persona ID for {@code botName}, or
+     * {@link net.shasankp000.GameAI.persona.PersonaRegistry#DEFAULT_ID} if none has been set.
+     *
+     * @param botName The in-game bot name.
+     * @return A non-null persona ID string (may not yet exist in the registry
+     *         if the config was hand-edited; callers should run it through
+     *         {@link net.shasankp000.GameAI.persona.PersonaRegistry#getOrDefault}).
+     */
+    public String getBotPersona(String botName) {
+        if (botPersonaMap == null) return net.shasankp000.GameAI.persona.PersonaRegistry.DEFAULT_ID;
+        return botPersonaMap.getOrDefault(
+                botName,
+                net.shasankp000.GameAI.persona.PersonaRegistry.DEFAULT_ID);
+    }
+
+    /**
+     * Sets the active persona ID for {@code botName} and persists the config.
+     *
+     * @param botName   The in-game bot name.
+     * @param personaId A persona ID known to
+     *                  {@link net.shasankp000.GameAI.persona.PersonaRegistry}.
+     */
+    public void setBotPersona(String botName, String personaId) {
+        if (botPersonaMap == null) botPersonaMap = new HashMap<>();
+        botPersonaMap.put(botName, personaId);
+        save();
     }
 }

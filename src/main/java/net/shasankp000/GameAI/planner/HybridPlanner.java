@@ -1,5 +1,7 @@
 package net.shasankp000.GameAI.planner;
 
+import net.minecraft.server.network.ServerPlayerEntity;
+import net.shasankp000.GameAI.BotEventHandler;
 import net.shasankp000.GameAI.RLAgent;
 import net.shasankp000.GameAI.State;
 import org.slf4j.Logger;
@@ -64,6 +66,90 @@ public class HybridPlanner {
         );
     }
 
+    // -------------------------------------------------------------------------
+    // Static entry-point called by AutonomousGoalEngine
+    // -------------------------------------------------------------------------
+
+    /**
+     * Static facade used by {@link net.shasankp000.GameAI.autonomous.AutonomousGoalEngine}
+     * to dispatch a mapped goal without needing to hold a planner instance.
+     *
+     * <p>Builds a transient {@link HybridPlanner} from fresh planner components,
+     * calls {@link #buildPlan(State, String, short)}, and executes each
+     * {@link PlannedStep} in sequence via {@link net.shasankp000.FunctionCaller.FunctionCallerV2}.
+     *
+     * @param bot         The bot {@link ServerPlayerEntity} executing the goal.
+     * @param goalId      Numeric goal identifier from {@link GoalMapper}.
+     * @param goalText    Human-readable goal description for plan generation.
+     */
+    public static void executeGoal(ServerPlayerEntity bot, short goalId, String goalText) {
+        LOGGER.info("[HybridPlanner] executeGoal called -- bot='{}', goalId={}, goal='{}'",
+                bot.getName().getString(), goalId, goalText);
+
+        // 1. Obtain the current bot State snapshot from BotEventHandler
+        // FIX: getCurrentState() takes no arguments
+        State currentState = BotEventHandler.getCurrentState();
+        if (currentState == null) {
+            LOGGER.warn("[HybridPlanner] Could not obtain State for bot '{}' -- skipping goal '{}'",
+                    bot.getName().getString(), goalText);
+            return;
+        }
+
+        // 2. Build planner components
+        // FIX: GoalVector must be created first; ActionGraph constructor requires GoalVector
+        //      (no static ActionGraph.buildDefault() exists)
+        GoalVector goalVector             = new GoalVector();
+        ActionGraph actionGraph           = new ActionGraph(goalVector);
+        MarkovChain2 markovChain          = new MarkovChain2();
+        // FIX: getRLAgent() takes no arguments
+        RLAgent rlAgent                   = BotEventHandler.getRLAgent();
+        // FIX: SequenceRiskAnalyzer constructor requires RLAgent
+        SequenceRiskAnalyzer riskAnalyzer = new SequenceRiskAnalyzer(rlAgent);
+
+        HybridPlanner planner = new HybridPlanner(
+                actionGraph, goalVector, markovChain, rlAgent, riskAnalyzer);
+
+        try {
+            // 3. Build the plan
+            Plan plan = planner.buildPlan(currentState, goalText, goalId);
+            // FIX: Plan uses a public field `steps`, not a getSteps() getter
+            if (plan == null || plan.steps.isEmpty()) {
+                LOGGER.warn("[HybridPlanner] No plan produced for goal '{}' -- logging fallback",
+                        goalText);
+                // FIX: BotEventHandler.dispatchGoalFallback() does not exist;
+                //      log the situation and return — the caller (AutonomousGoalEngine) handles retries
+                LOGGER.info("[HybridPlanner] Fallback: goal='{}' could not be planned by HybridPlanner; " +
+                        "AutonomousGoalEngine should retry or route via LLM.", goalText);
+                return;
+            }
+
+            // FIX: plan.getSteps() → plan.steps
+            LOGGER.info("[HybridPlanner] Executing plan with {} step(s) for goal '{}'",
+                    plan.steps.size(), goalText);
+
+            new net.shasankp000.FunctionCaller.FunctionCallerV2(
+                    bot.getCommandSource().withSilent().withMaxLevel(4),
+                    bot.getUuid());
+            boolean executed = net.shasankp000.FunctionCaller.FunctionCallerV2
+                    .executePlan(plan, null, currentState)
+                    .join();
+
+            if (!executed) {
+                LOGGER.warn("[HybridPlanner] Plan execution failed for goal '{}'", goalText);
+                return;
+            }
+
+            LOGGER.info("[HybridPlanner] Plan complete for goal '{}'", goalText);
+
+        } finally {
+            planner.shutdown();
+        }
+    }
+
+    // -------------------------------------------------------------------------
+    // Instance methods
+    // -------------------------------------------------------------------------
+
     /**
      * Generates an optimal action plan for the given goal.
      */
@@ -125,7 +211,7 @@ public class HybridPlanner {
         Plan plan = convertToplan(bestResult, goalId, currentState);
 
         long elapsed = System.currentTimeMillis() - startTime;
-        LOGGER.info("✓ Hybrid plan completed in {}ms with score {}", elapsed, String.format("%.2f", bestScore));
+        LOGGER.info("Hybrid plan completed in {}ms with score {}", elapsed, String.format("%.2f", bestScore));
 
         return plan;
     }
@@ -257,13 +343,9 @@ public class HybridPlanner {
      * Heuristic function for A* (estimated distance to goal).
      */
     private double heuristic(ActionNode current, ActionNode goal, float[] goalEmbedding) {
-        // Combine semantic similarity and estimated time cost
         double semanticDist = goalVector.euclideanDistance(current.getEmbedding(), goal.getEmbedding());
         double timeCost = current.getEstimatedTimeCost();
-
-        // Also consider similarity to overall goal
         double goalSimilarity = 1.0 - goalVector.cosineSimilarity(current.getEmbedding(), goalEmbedding);
-
         return (semanticDist * 0.5) + (timeCost * 0.3) + (goalSimilarity * 0.2);
     }
 
@@ -273,15 +355,13 @@ public class HybridPlanner {
     private List<ActionNode> mergePaths(SearchNode forwardNode, SearchNode backwardNode) {
         LinkedList<ActionNode> path = new LinkedList<>();
 
-        // Reconstruct forward path
         SearchNode current = forwardNode;
         while (current != null) {
             path.addFirst(current.node);
             current = current.parent;
         }
 
-        // Reconstruct backward path (reverse order)
-        current = backwardNode.parent; // Skip meeting point
+        current = backwardNode.parent; // Skip meeting point (already in forward path)
         while (current != null) {
             path.add(current.node);
             current = current.parent;
@@ -311,26 +391,17 @@ public class HybridPlanner {
     private Set<String> extractStateConditions(State state) {
         Set<String> conditions = new HashSet<>();
 
-        // Add inventory conditions based on hotbar items
         List<String> hotbarItems = state.getHotBarItems();
         for (String item : hotbarItems) {
-            if (item.contains("log") || item.contains("wood")) {
-                conditions.add("has_item:wood");
-            }
-            if (item.contains("stone") || item.contains("cobblestone")) {
-                conditions.add("has_item:stone");
-            }
-            if (item.contains("axe") || item.contains("pickaxe") || item.contains("sword")) {
-                conditions.add("has_tool");
-            }
+            if (item.contains("log") || item.contains("wood")) conditions.add("has_item:wood");
+            if (item.contains("stone") || item.contains("cobblestone")) conditions.add("has_item:stone");
+            if (item.contains("axe") || item.contains("pickaxe") || item.contains("sword")) conditions.add("has_tool");
         }
 
-        // Add health conditions
         if (state.getBotHealth() > 15) conditions.add("health:good");
         else if (state.getBotHealth() > 5) conditions.add("health:moderate");
         else conditions.add("health:critical");
 
-        // Add equipment conditions
         if (!hotbarItems.isEmpty() && !hotbarItems.getFirst().equals("minecraft:air")) {
             conditions.add("has_equipment");
         }
@@ -352,62 +423,52 @@ public class HybridPlanner {
 
         Plan plan = new Plan(UUID.randomUUID(), goalId, steps);
         plan.score = result.score;
-
         return plan;
     }
 
     /**
-     * Infers parameters for an action based on context and returns as comma-separated string.
+     * Infers parameters for an action based on context.
      */
     private String inferParameters(ActionNode node, State state) {
-        // Use SharedState if available via markovChain
         switch (node.getActionName()) {
-            case "searchBlocks":
-                // Check if markov chain has target block type in shared state
+            case "searchBlocks": {
                 Object targetBlock = markovChain.getSharedState("targetBlockType");
                 String blockType = (targetBlock != null) ? targetBlock.toString() : "minecraft:oak_log";
                 return String.format("%s,10,100,20", blockType);
-
+            }
             case "goTo":
-            case "moveToCoordinates":
-                // Try to use target from SharedState if available
+            case "moveToCoordinates": {
                 Object foundX = markovChain.getSharedState("foundBlock.x");
                 if (foundX != null) {
                     Object foundY = markovChain.getSharedState("foundBlock.y");
                     Object foundZ = markovChain.getSharedState("foundBlock.z");
                     return String.format("%s,%s,%s,true", foundX, foundY, foundZ);
                 }
-                // Fallback: use nearby location
                 return String.format("%d,%d,%d,true",
                     state.getBotX() + 2, state.getBotY(), state.getBotZ());
-
+            }
             case "mineBlock":
-            case "breakBlock":
-                // Try to use target from SharedState
+            case "breakBlock": {
                 Object targetX = markovChain.getSharedState("foundBlock.x");
                 if (targetX != null) {
                     Object targetY = markovChain.getSharedState("foundBlock.y");
                     Object targetZ = markovChain.getSharedState("foundBlock.z");
                     return String.format("%s,%s,%s", targetX, targetY, targetZ);
                 }
-                // Fallback: position in front of bot
                 return String.format("%d,%d,%d",
                     state.getBotX() + 2, state.getBotY(), state.getBotZ());
-
+            }
             case "placeBlock":
                 return String.format("%d,%d,%d,minecraft:dirt",
                     state.getBotX() + 1, state.getBotY() - 1, state.getBotZ());
-
             case "turn":
                 return "right";
-
             case "look":
                 return "north";
-
-            case "detectBlocks":
+            case "detectBlocks": {
                 Object detectBlock = markovChain.getSharedState("targetBlockType");
                 return (detectBlock != null) ? detectBlock.toString() : "minecraft:oak_log";
-
+            }
             default:
                 return "";
         }
@@ -415,7 +476,6 @@ public class HybridPlanner {
 
     /**
      * Shuts down the search executor thread pool.
-     * Called externally when planner is no longer needed.
      */
     @SuppressWarnings("unused") // Public API method for resource cleanup
     public void shutdown() {
@@ -429,14 +489,16 @@ public class HybridPlanner {
         }
     }
 
+    // -------------------------------------------------------------------------
     // Inner classes
+    // -------------------------------------------------------------------------
 
     private static class SearchNode {
         final ActionNode node;
         final SearchNode parent;
-        final double gScore; // Cost from start
-        final double hScore; // Heuristic to goal
-        final double fScore; // Total estimated cost
+        final double gScore;
+        final double hScore;
+        final double fScore;
         final int depth;
 
         SearchNode(ActionNode node, SearchNode parent, double gScore, double hScore) {
@@ -463,4 +525,3 @@ public class HybridPlanner {
         }
     }
 }
-
