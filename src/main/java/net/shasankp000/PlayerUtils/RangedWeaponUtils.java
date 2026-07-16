@@ -1136,7 +1136,7 @@ public class RangedWeaponUtils {
 
         if (weaponSlot != -1) {
             // Select the hotbar slot
-            bot.getInventory().selectedSlot = weaponSlot;
+            bot.getInventory().setSelectedSlot(weaponSlot);
             LOGGER.info("Equipped weapon in mainhand from hotbar slot {}", weaponSlot);
         } else {
             LOGGER.warn("No bow or crossbow found in inventory!");

@@ -66,7 +66,7 @@ public class BlockPlacementTool {
                 }
 
                 // Switch to that hotbar slot
-                bot.getInventory().selectedSlot = hotbarSlot;
+                bot.getInventory().setSelectedSlot(hotbarSlot);
                 LOGGER.info("Switched to hotbar slot {} with {}", hotbarSlot, normalizedBlockType);
 
                 // Step 5: Check if target position is valid for placement

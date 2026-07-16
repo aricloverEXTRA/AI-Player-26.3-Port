@@ -257,7 +257,7 @@ public class modCommandRegistry {
                                                         case "left", "right", "back" -> {
                                                             turnTool.turn(bot.getCommandSource().withSilent().withMaxLevel(4), direction);
 
-                                                            LOGGER.info("Now facing {} which is in {} in {} axis", direction, bot.getFacing().getName(), bot.getFacing().getAxis().asString());
+                                                            LOGGER.info("Now facing {} which is in {} in {} axis", direction, bot.getFacing().getId(), bot.getFacing().getAxis().asString());
                                                         }
                                                         default -> {
                                                             server.execute(() -> {
@@ -388,7 +388,7 @@ public class modCommandRegistry {
 
                                                     // Switch to bow/crossbow if not already equipped
                                                     int weaponSlot = RangedWeaponUtils.getBowOrCrossbowSlot(bot);
-                                                    if (weaponSlot != -1 && bot.getInventory().selectedSlot != (weaponSlot - 1)) {
+                                                    if (weaponSlot != -1 && bot.getInventory().getSelectedSlot() != (weaponSlot - 1)) {
                                                         server.getCommandManager().executeWithPrefix(botSource, "/player " + bot.getName().getString() + " hotbar " + weaponSlot);
                                                         LOGGER.info("Switched to ranged weapon in slot {}", weaponSlot);
                                                         try {
@@ -1159,7 +1159,7 @@ public class modCommandRegistry {
 
             if (bot!=null) {
 
-                Objects.requireNonNull(bot.getAttributeInstance(EntityAttributes.GENERIC_KNOCKBACK_RESISTANCE)).setBaseValue(0.0);
+                Objects.requireNonNull(bot.getAttributeInstance(EntityAttributes.KNOCKBACK_RESISTANCE)).setBaseValue(0.0);
 
                 RespawnHandler.registerRespawnListener(bot);
 
@@ -1192,7 +1192,7 @@ public class modCommandRegistry {
 
             if (bot!=null) {
 
-                Objects.requireNonNull(bot.getAttributeInstance(EntityAttributes.GENERIC_KNOCKBACK_RESISTANCE)).setBaseValue(0.0);
+                Objects.requireNonNull(bot.getAttributeInstance(EntityAttributes.KNOCKBACK_RESISTANCE)).setBaseValue(0.0);
 
                 System.out.println("Registering respawn listener....");
 
@@ -1373,8 +1373,8 @@ public class modCommandRegistry {
             String botName = bot.getName().getLiteralString();
 
             BlockPos currentPosition = bot.getBlockPos();
-            BlockPos newPosition = currentPosition.add(1, 0, 0);
-            bot.teleport(bot.getServerWorld(), newPosition.getX(), newPosition.getY(), newPosition.getZ(), Set.of(), bot.getYaw(), bot.getPitch());
+            BlockPos newPosition = currentPosition.add(1, 0, 0); // Move one block forward
+            bot.teleport(bot.getWorld(), (double)newPosition.getX(), (double)newPosition.getY(), (double)newPosition.getZ(), java.util.Collections.emptySet(), bot.getYaw(), bot.getPitch(), true);
 
             LOGGER.info("Teleported {} 1 positive block ahead", botName);
 

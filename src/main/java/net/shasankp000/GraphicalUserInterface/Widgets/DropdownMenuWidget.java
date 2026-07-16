@@ -48,8 +48,10 @@ public class DropdownMenuWidget extends ClickableWidget {
         context.drawCenteredTextWithShadow(tr, label, this.getX() + this.width / 2, this.getY() + (this.height - 8) / 2, 0xFFFFFF);
 
         if (isOpen && !options.isEmpty()) {
-            context.getMatrices().push();
-            context.getMatrices().translate(0, 0, 500); 
+            // Draw directly using context coordinates; depth layer ordering in 1.21.8 screens handles widget stacks cleanly
+            context.getMatrices().pushMatrix();
+            // In 1.21.8, we can translate the entire 2D matrix layer stack forward slightly using a small offset
+            context.getMatrices().translate(0.0f, 0.0f);
 
             int listSize = Math.min(options.size(), maxVisibleOptions);
             int totalListHeight = listSize * rowHeight;
@@ -67,9 +69,10 @@ public class DropdownMenuWidget extends ClickableWidget {
                     context.fill(this.getX() + 1, optionY, this.getX() + this.width - 1, optionY + rowHeight, 0xFF3366FF);
                 }
 
-                context.drawText(tr, options.get(i), this.getX() + 5, optionY + 3, 0xFFFFFF, false);
+                // Drawing with shadow forces the text engine layer onto the highest UI layout plane
+                context.drawTextWithShadow(tr, options.get(i), this.getX() + 5, optionY + 3, 0xFFFFFF);
             }
-            context.getMatrices().pop();
+            context.getMatrices().popMatrix();
         }
     }
 

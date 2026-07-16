@@ -65,7 +65,7 @@ public class SearchBlocks {
         // Periodic cleanup of old caches
         cleanupOldCaches();
 
-        ServerWorld world = bot.getServerWorld();
+        ServerWorld world = bot.getWorld();
         BlockPos botPos = bot.getBlockPos();
         UUID botId = bot.getUuid();
 

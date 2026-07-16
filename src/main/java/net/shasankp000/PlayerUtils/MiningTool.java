@@ -72,7 +72,7 @@ public class MiningTool {
     private static void switchToTool(ServerPlayerEntity bot, ItemStack tool) {
         for (int i = 0; i < 9; i++) {
             if (bot.getInventory().getStack(i) == tool) {
-                bot.getInventory().selectedSlot = i;
+                bot.getInventory().setSelectedSlot(i);
                 break;
             }
         }

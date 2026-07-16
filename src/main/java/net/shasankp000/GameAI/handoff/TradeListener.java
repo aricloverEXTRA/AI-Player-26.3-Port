@@ -124,7 +124,7 @@ public final class TradeListener {
         ItemStack thrown = itemEntity.getStack();
         if (thrown.isEmpty()) return false;
 
-        long currentTick = bot.getServerWorld().getTime();
+        long currentTick = bot.getWorld().getTime();
         tickPrune(currentTick);
 
         TradeSession existing = SESSIONS.get(throwerUuid);
@@ -216,7 +216,7 @@ public final class TradeListener {
     }
 
     private static void dropItemNearBot(ServerPlayerEntity bot, ItemStack stack) {
-        ServerWorld world = bot.getServerWorld();
+        ServerWorld world = bot.getWorld();
         Vec3d pos = bot.getPos().add(0, 0.5, 0);
         ItemEntity ie = new ItemEntity(world, pos.x, pos.y, pos.z, stack);
         ie.setVelocity(0, 0.1, 0);

@@ -71,9 +71,9 @@ public final class ItemHandoffListener {
         // (net.minecraft.entity.ItemEntity stores it under the "Thrower" key).
         if (thrower == null) {
             net.minecraft.nbt.NbtCompound nbt = new net.minecraft.nbt.NbtCompound();
-            itemEntity.writeNbt(nbt);
-            if (nbt.containsUuid("Thrower")) {
-                java.util.UUID throwerId = nbt.getUuid("Thrower");
+            java.util.Optional<java.util.UUID> throwerUuidOpt = nbt.get("Thrower", net.minecraft.util.Uuids.INT_STREAM_CODEC);
+            if (throwerUuidOpt.isPresent()) {
+                java.util.UUID throwerId = throwerUuidOpt.get();
                 net.minecraft.server.MinecraftServer srv = serverPlayer.getServer();
                 if (srv != null && !throwerId.equals(serverPlayer.getUuid())) {
                     ServerPlayerEntity candidate = srv.getPlayerManager().getPlayer(throwerId);

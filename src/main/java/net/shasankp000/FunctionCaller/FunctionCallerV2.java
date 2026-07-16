@@ -70,9 +70,6 @@ import net.shasankp000.PathFinding.GoTo;
 import net.shasankp000.PathFinding.PathTracer;
 
 import net.shasankp000.PlayerUtils.*;
-
-import net.shasankp000.PlayerUtils.BlockPlacementTool;
-
 import net.shasankp000.ServiceLLMClients.LLMClient;
 
 import net.shasankp000.WebSearch.WebSearchTool;
@@ -477,7 +474,7 @@ public class FunctionCallerV2 {
             MinecraftServer server = botSource.getServer();
             String botName = botSource.getName();
             server.getCommandManager().executeWithPrefix(botSource, "/player " + botName + " turn " + direction); // choosing the command route instead of calling function to check if the bug still exists.
-            getFunctionOutput("Now facing " + direction + " which is in " + Objects.requireNonNull(botSource.getPlayer()).getFacing().getName() + " in " + Objects.requireNonNull(botSource.getPlayer()).getFacing().getAxis().asString() + " axis.");
+            getFunctionOutput("Now facing " + direction + " which is in " + Objects.requireNonNull(botSource.getPlayer()).getFacing().getId() + " in " + Objects.requireNonNull(botSource.getPlayer()).getFacing().getAxis().asString() + " axis.");
         }
 
         /** look: change head facing direction **/
@@ -486,7 +483,7 @@ public class FunctionCallerV2 {
             MinecraftServer server = botSource.getServer();
             String botName = botSource.getName();
             server.getCommandManager().executeWithPrefix(botSource, "/player " + botName + " look " + cardinalDirection); // choosing the command route instead of calling function to check if the bug still exists.
-            getFunctionOutput("Now facing cardinal direction: " + Objects.requireNonNull(botSource.getPlayer()).getFacing().getName() + " which is in " + Objects.requireNonNull(botSource.getPlayer()).getFacing().getAxis().asString() + " axis.");
+            getFunctionOutput("Now facing cardinal direction: " + Objects.requireNonNull(botSource.getPlayer()).getFacing().getId() + " which is in " + Objects.requireNonNull(botSource.getPlayer()).getFacing().getAxis().asString() + " axis.");
         }
 
         /** mineBlock: break block **/
@@ -884,7 +881,7 @@ public class FunctionCallerV2 {
             // first time call.
             assert botSource.getPlayer() != null;
             Direction facingDir = botSource.getPlayer().getFacing();
-            sb.append("- Facing: ").append(facingDir.getName());
+            sb.append("- Facing: ").append(facingDir.getId());
             sb.append(" (axis: ").append(facingDir.getAxis().asString()).append(")");
         }
 
