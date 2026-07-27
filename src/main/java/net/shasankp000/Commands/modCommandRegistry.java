@@ -1202,14 +1202,17 @@ public class modCommandRegistry {
 
                 System.out.println("Set bot's username to " + botName);
 
-                String llmProvider = System.getProperty("aiplayer.llmMode", "ollama");
+                String llmProvider = System.getProperty("aiplayer.llmMode", "custom");
 
                 System.out.println("Using provider");
 
                 switch (llmProvider) {
                     case "openai", "gpt", "google", "gemini", "anthropic", "claude", "xAI", "xai", "grok", "custom":
                         LLMClient llmClient = LLMClientFactory.createClient(llmProvider);
-                        assert llmClient != null;
+                        if (llmClient == null) {
+                            ChatUtils.sendSystemMessage(serverSource, "LLM client could not be created. Check your OpenAI-compatible endpoint, API key, and selected model.");
+                            break;
+                        }
 
                         ChatUtils.sendSystemMessage(serverSource, "Please wait while " + botName + " connects to " + llmClient.getProvider() + "'s servers.");
                         LLMServiceHandler.sendInitialResponse(bot.createCommandSourceStack().withSuppressedOutput().withMaximumPermission(net.minecraft.server.permissions.PermissionSet.ALL_PERMISSIONS), llmClient);
@@ -1246,66 +1249,9 @@ public class modCommandRegistry {
 
                         break;
 
-                    case "ollama":
-                        ChatUtils.sendSystemMessage(serverSource, "Please wait while " + botName + " connects to the language model.");
-                        ollamaClient.initializeOllamaClient();
-
-                        new Thread(() -> {
-                            LOGGER.info("Waiting for Ollama client to initialize...");
-                            int waitCount = 0;
-                            while (!ollamaClient.isInitialized) {
-                                try {
-                                    Thread.sleep(500L);
-                                    waitCount++;
-                                    if (waitCount % 10 == 0) {
-                                        LOGGER.warn("Still waiting for Ollama initialization... ({} seconds)", waitCount / 2);
-                                    }
-                                    if (waitCount > 60) {
-                                        LOGGER.error("Ollama initialization timeout! Starting AutoFace anyway.");
-                                        AutoFaceEntity.startAutoFace(bot);
-                                        Thread.currentThread().interrupt();
-                                        return;
-                                    }
-                                } catch (InterruptedException e) {
-                                    LOGGER.error("Ollama client initialization interrupted.");
-                                    Thread.currentThread().interrupt();
-                                    break;
-                                }
-                            }
-
-                            LOGGER.info("Ollama client initialized! Starting AutoFace...");
-                            ollamaClient.sendInitialResponse(bot.createCommandSourceStack().withSuppressedOutput().withMaximumPermission(net.minecraft.server.permissions.PermissionSet.ALL_PERMISSIONS));
-                            AutoFaceEntity.startAutoFace(bot);
-
-                            Thread.currentThread().interrupt();
-
-                        }).start();
-
-                        break;
-
                     default:
-                        LOGGER.warn("Unsupported provider detected. Defaulting to Ollama client");
-                        ChatUtils.sendSystemMessage(serverSource, "Warning! Unsupported provider detected. Defaulting to Ollama client");
-                        ChatUtils.sendSystemMessage(serverSource, "Please wait while " + botName + " connects to the language model.");
-                        ollamaClient.initializeOllamaClient();
-
-                        new Thread(() -> {
-                            while (!ollamaClient.isInitialized) {
-                                try {
-                                    Thread.sleep(500L);
-                                } catch (InterruptedException e) {
-                                    LOGGER.error("Ollama client initialization interrupted.");
-                                    Thread.currentThread().interrupt();
-                                    break;
-                                }
-                            }
-
-                            ollamaClient.sendInitialResponse(bot.createCommandSourceStack().withSuppressedOutput().withMaximumPermission(net.minecraft.server.permissions.PermissionSet.ALL_PERMISSIONS));
-                            AutoFaceEntity.startAutoFace(bot);
-
-                            Thread.currentThread().interrupt();
-
-                        }).start();
+                        LOGGER.warn("Unsupported provider detected: {}", llmProvider);
+                        ChatUtils.sendSystemMessage(serverSource, "Unsupported provider. Set aiplayer.llmMode=custom and configure an OpenAI-compatible endpoint.");
 
                         break;
 

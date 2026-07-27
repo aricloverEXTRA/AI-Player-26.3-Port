@@ -64,7 +64,7 @@ public class AIPlayer implements ModInitializer {
 			LOGGER.info("Set DJL cache directory to: {}", djlCacheDir);
 		}
 
-		String llmProvider = System.getProperty("aiplayer.llmMode", "ollama");
+		String llmProvider = System.getProperty("aiplayer.llmMode", "custom");
 
 		System.out.println("Using provider: " + llmProvider);
 

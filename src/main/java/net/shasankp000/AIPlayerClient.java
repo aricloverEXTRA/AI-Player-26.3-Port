@@ -18,7 +18,6 @@ import net.shasankp000.FilingSystem.LLMClientFactory;
 import net.shasankp000.FilingSystem.ManualConfig;
 import net.shasankp000.LauncherDetection.LauncherEnvironment;
 import net.shasankp000.Network.OpenConfigPayload;
-import net.shasankp000.OllamaClient.ollamaClient;
 import net.shasankp000.ServiceLLMClients.*;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -104,7 +103,7 @@ public class AIPlayerClient implements ClientModInitializer {
 
         LOGGER.debug("Running on environment type: {}", FabricLoader.getInstance().getEnvironmentType());
 
-        String llmProvider = System.getProperty("aiplayer.llmMode", "ollama");
+        String llmProvider = System.getProperty("aiplayer.llmMode", "custom");
 
         LOGGER.debug("Using provider: {}", llmProvider);
 
@@ -203,17 +202,13 @@ public class AIPlayerClient implements ClientModInitializer {
                             }
                             break;
                         }
-                        case "ollama":
-                            ollamaClient.runFromChat(finalBotName, combinedContext, finalPlayerUUID);
-                            break;
                         default:
-                            LOGGER.warn("Unsupported provider detected. Defaulting to Ollama client");
+                            LOGGER.warn("Unsupported provider detected: {}", llmProvider);
                             client.gui.toastManager().addToast(
                                     new SystemToast(SystemToast.SystemToastId.NARRATOR_TOGGLE,
                                             Component.nullToEmpty("Invalid LLM Client."),
-                                            Component.nullToEmpty("Unsupported provider detected. Defaulting to Ollama client"))
+                                            Component.nullToEmpty("Set a supported OpenAI-compatible provider."))
                             );
-                            ollamaClient.runFromChat(finalBotName, combinedContext, finalPlayerUUID);
                             break;
                     }
                 }
@@ -259,7 +254,7 @@ public class AIPlayerClient implements ClientModInitializer {
                 final String finalBotName  = botName;
 
                 switch (llmProvider) {
-                    case "openai", "gpt", "google", "gemini", "anthropic", "claude", "xAI", "xai", "grok": {
+                    case "openai", "gpt", "google", "gemini", "anthropic", "claude", "xAI", "xai", "grok", "custom": {
                         LLMClient llmClient = LLMClientFactory.createClient(llmProvider);
                         if (llmClient != null) {
                             LLMServiceHandler.runFromChat(message, finalBotName, finalPlayerUUID, llmClient);
@@ -286,17 +281,13 @@ public class AIPlayerClient implements ClientModInitializer {
                         }
                         break;
                     }
-                    case "ollama":
-                        ollamaClient.runFromChat(finalBotName, message, finalPlayerUUID);
-                        break;
                     default:
-                        LOGGER.warn("Unsupported provider detected. Defaulting to Ollama client");
+                        LOGGER.warn("Unsupported provider detected: {}", llmProvider);
                         client.gui.toastManager().addToast(
                                 new SystemToast(SystemToast.SystemToastId.NARRATOR_TOGGLE,
                                         Component.nullToEmpty("Invalid LLM Client."),
-                                        Component.nullToEmpty("Unsupported provider detected. Defaulting to Ollama client"))
+                                        Component.nullToEmpty("Set a supported OpenAI-compatible provider."))
                         );
-                        ollamaClient.runFromChat(finalBotName, message, finalPlayerUUID);
                         break;
                 }
             }

@@ -1,7 +1,5 @@
 package net.shasankp000.ServiceLLMClients;
 
-import io.github.amithkoujalgi.ollama4j.core.OllamaAPI;
-import io.github.amithkoujalgi.ollama4j.core.types.OllamaModelType;
 import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerPlayer;
@@ -29,8 +27,6 @@ public class LLMServiceHandler {
     private static final ExecutorService BOT_TASK_POOL = Executors.newCachedThreadPool();
     private static final Pattern THINK_BLOCK = Pattern.compile("<think>([\\s\\S]*?)</think>");
     public static String initialResponse = "";
-    private static final String host = "http://localhost:11434";
-    public static final OllamaAPI ollamaAPI = new OllamaAPI(host);
     public static boolean isInitialized = false;
 
     private static String generateSystemPrompt(String botName) {
@@ -235,7 +231,7 @@ public class LLMServiceHandler {
                 LOGGER.warn("⚠️ Intent unclear, retrying with LLM classification...");
                 ChatUtils.sendChatMessages(botSource, "🔍 Reanalyzing...");
 
-                NLPProcessor.Intent retry = retryIntentLLM(message);
+                NLPProcessor.Intent retry = retryIntentLLM(message, client);
 
                 LOGGER.info("📨 Retry intent: {}", retry);
 
@@ -251,7 +247,7 @@ public class LLMServiceHandler {
                         Thread.currentThread().setName("LLM-Function-Caller-Retry-Worker");
                         LOGGER.info("🧵 Started FunctionCallerV2 retry worker thread");
                         new FunctionCallerV2(botSource, playerUUID);
-                        FunctionCallerV2.run(message);
+                        FunctionCallerV2.run(message, client);
                         LOGGER.info("✅ Finished FunctionCallerV2 retry worker thread");
                     });
                 } else {
@@ -262,7 +258,7 @@ public class LLMServiceHandler {
     }
 
 
-    private static NLPProcessor.Intent retryIntentLLM(String message) {
-        return NLPProcessor.getIntentionFromLLM(message);
+    private static NLPProcessor.Intent retryIntentLLM(String message, LLMClient client) {
+        return NLPProcessor.getIntentionFromLLM(message, client);
     }
 }

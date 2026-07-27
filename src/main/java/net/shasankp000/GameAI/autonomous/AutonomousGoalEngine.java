@@ -182,7 +182,7 @@ public class AutonomousGoalEngine {
     void generateAndEnqueueGoals() {
         if (stopped.get()) return;
 
-        String llmProvider = System.getProperty("aiplayer.llmMode", "ollama");
+        String llmProvider = System.getProperty("aiplayer.llmMode", "custom");
         LOGGER.info("[autonomous] Requesting goal plan from LLM (provider={})", llmProvider);
 
         try {
@@ -258,7 +258,7 @@ public class AutonomousGoalEngine {
         LOGGER.info("[autonomous] Executing goal '{}' (priority={}, source={})",
                 entry.goalText(), entry.priority(), entry.source());
 
-        String llmProvider = System.getProperty("aiplayer.llmMode", "ollama");
+        String llmProvider = System.getProperty("aiplayer.llmMode", "custom");
 
         // For WORLD_EVENT goals that are purely conversational, route through
         // LLMServiceHandler so the bot produces a natural chat response.
@@ -349,27 +349,9 @@ public class AutonomousGoalEngine {
 
     private String callLLM(String provider, String systemPrompt, String userPrompt) {
         try {
-            if (provider.equals("ollama")) {
-                // Delegate to ollamaClient's raw API
-                io.github.amithkoujalgi.ollama4j.core.OllamaAPI api =
-                        new io.github.amithkoujalgi.ollama4j.core.OllamaAPI("http://localhost:11434");
-                var messages = java.util.List.of(
-                        new io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessage(
-                                io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessageRole.SYSTEM,
-                                systemPrompt),
-                        new io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessage(
-                                io.github.amithkoujalgi.ollama4j.core.models.chat.OllamaChatMessageRole.USER,
-                                userPrompt)
-                );
-                var resp = net.shasankp000.OllamaClient.OllamaAPIHelper.smartChat(
-                        api, "http://localhost:11434",
-                        AIPlayer.CONFIG.getSelectedLanguageModel(), messages);
-                return resp.getContent();
-            } else {
-                LLMClient client = buildClient(provider);
-                if (client == null) return null;
-                return client.sendPrompt(systemPrompt, userPrompt);
-            }
+            LLMClient client = buildClient(provider);
+            if (client == null) return null;
+            return client.sendPrompt(systemPrompt, userPrompt);
         } catch (Exception e) {
             LOGGER.error("[autonomous] LLM call failed: {}", e.getMessage());
             return null;

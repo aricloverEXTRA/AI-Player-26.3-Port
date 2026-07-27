@@ -60,6 +60,7 @@ import net.shasankp000.PathFinding.GoTo;
 import net.shasankp000.PathFinding.PathTracer;
 
 import net.shasankp000.PlayerUtils.*;
+import net.shasankp000.FilingSystem.LLMClientFactory;
 import net.shasankp000.ServiceLLMClients.LLMClient;
 
 import net.shasankp000.WebSearch.WebSearchTool;
@@ -254,21 +255,14 @@ public class FunctionCallerV2 {
                     "Please analyze the situation and generate an appropriate action pipeline. " +
                     "Consider the bot's current state and surroundings carefully.";
 
-                String response;
+                String llmProvider = System.getProperty("aiplayer.llmMode", "custom");
+                LLMClient client = LLMClientFactory.createClient(llmProvider);
+                if (client == null) {
+                    logger.error("[planner] No OpenAI-compatible LLM client configured for fallback.");
+                    return false;
+                }
 
-                // Use Ollama for LLM fallback
-                List<OllamaChatMessage> messages = new ArrayList<>();
-                messages.add(new OllamaChatMessage(OllamaChatMessageRole.SYSTEM, fullSystemPrompt));
-                messages.add(new OllamaChatMessage(OllamaChatMessageRole.USER, userPrompt));
-
-                net.shasankp000.OllamaClient.OllamaThinkingResponse thinkingResponse =
-                        net.shasankp000.OllamaClient.OllamaAPIHelper.smartChat(
-                                ollamaAPI,
-                                "http://localhost:11434",
-                                net.shasankp000.AIPlayer.CONFIG.getSelectedLanguageModel(),
-                                messages
-                        );
-                response = thinkingResponse.getContent();
+                String response = client.sendPrompt(fullSystemPrompt, userPrompt);
 
                 logger.info("[planner] Raw LLM response: {}", response);
 

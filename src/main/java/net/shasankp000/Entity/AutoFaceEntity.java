@@ -583,7 +583,7 @@ public class AutoFaceEntity {
                 // Feature 5 — clear all proximity state on server stop
                 ProximityTracker.clear();
             } catch (Exception e) {
-                LOGGER.error("Failed to initialize Ollama client", e);
+                LOGGER.error("Failed to stop AutoFace cleanly", e);
             }
         });
     }

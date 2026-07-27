@@ -31,9 +31,16 @@ public class GenericOpenAIClient implements LLMClient {
         if (baseUrl == null || baseUrl.trim().isEmpty()) {
             throw new IllegalArgumentException("Base URL cannot be null or empty");
         }
-        String trimmedUrl = baseUrl.trim();
-        this.baseUrl = trimmedUrl.endsWith("/") ? trimmedUrl : trimmedUrl + "/";
+        this.baseUrl = normalizeBaseUrl(baseUrl);
         this.client = HttpClient.newHttpClient();
+    }
+
+    private static String normalizeBaseUrl(String baseUrl) {
+        String normalized = baseUrl.trim().replaceAll("/+$", "");
+        normalized = normalized.replaceAll("/chat/completions$", "");
+        normalized = normalized.replaceAll("/completions$", "");
+        normalized = normalized.replaceAll("/embeddings$", "");
+        return normalized + "/";
     }
 
     @Override
@@ -60,12 +67,16 @@ public class GenericOpenAIClient implements LLMClient {
             requestBody.add("messages", messages);
             requestBody.addProperty("max_tokens", 150);
 
-            HttpRequest request = HttpRequest.newBuilder()
+            HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
                     .uri(URI.create(baseUrl + "chat/completions"))
-                    .header("Authorization", "Bearer " + apiKey)
                     .header("Content-Type", "application/json")
-                    .POST(BodyPublishers.ofString(requestBody.toString()))
-                    .build();
+                    .POST(BodyPublishers.ofString(requestBody.toString()));
+
+            if (apiKey != null && !apiKey.isBlank()) {
+                requestBuilder.header("Authorization", "Bearer " + apiKey);
+            }
+
+            HttpRequest request = requestBuilder.build();
 
             HttpResponse<String> response = client.send(request, BodyHandlers.ofString());
 
@@ -98,11 +109,15 @@ public class GenericOpenAIClient implements LLMClient {
     @Override
     public boolean isReachable() {
         try {
-            HttpRequest request = HttpRequest.newBuilder()
+            HttpRequest.Builder requestBuilder = HttpRequest.newBuilder()
                     .uri(URI.create(baseUrl + "models"))
-                    .header("Authorization", "Bearer " + apiKey)
-                    .GET()
-                    .build();
+                    .GET();
+
+            if (apiKey != null && !apiKey.isBlank()) {
+                requestBuilder.header("Authorization", "Bearer " + apiKey);
+            }
+
+            HttpRequest request = requestBuilder.build();
             HttpResponse<String> response = client.send(request, BodyHandlers.ofString());
             return response.statusCode() == 200;
         } catch (Exception e) {

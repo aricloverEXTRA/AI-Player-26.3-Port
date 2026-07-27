@@ -133,7 +133,7 @@ public class APIKeysScreen extends Screen {
         AIPlayer.CONFIG.save();
 
         // 3. Send a network packet for the currently selected mode only if it's a valid provider.
-        String llmMode = System.getProperty("aiplayer.llmMode", "ollama");
+        String llmMode = System.getProperty("aiplayer.llmMode", "custom");
 
         switch (llmMode) {
             case "openai":
