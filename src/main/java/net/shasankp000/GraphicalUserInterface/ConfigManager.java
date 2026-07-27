@@ -53,7 +53,7 @@ public class ConfigManager extends Screen {
 
         int centerX = this.width / 2;
         int topMargin = 50;
-        int fieldWidth = 300;
+        int fieldWidth = Math.max(300, Math.min(520, this.width - 80));
         int fieldHeight = 20;
         int buttonWidth = 100;
         int spacing = 30;
@@ -93,22 +93,21 @@ public class ConfigManager extends Screen {
 
     @Override
     public void extractRenderState(GuiGraphicsExtractor context, int mouseX, int mouseY, float delta) {
-        this.extractBackground(context, mouseX, mouseY, delta);
-
         int centerX = this.width / 2;
         String title = "AI-Player Mod Configuration Menu v1.0.5.4-release+26.2";
         context.text(this.font, title, centerX - (this.font.width(title) / 2), 20, 0xFFFFFFFF, true);
 
-        context.text(this.font, "Search Models:", centerX - 150, searchField.getY() - 15, 0xFFFFD700, true);
-        context.text(this.font, "Select Language Model:", centerX - 150, dropdownMenuWidget.getY() - 15, 0xFFFFD700, true);
+        int labelX = searchField.getX();
+        context.text(this.font, "Search Models:", labelX, searchField.getY() - 15, 0xFFFFD700, true);
+        context.text(this.font, "Select Language Model:", labelX, dropdownMenuWidget.getY() - 15, 0xFFFFD700, true);
 
         // Shifted an extra 10px down as requested
         int textOffset = dropdownMenuWidget.isExpanded() ? Math.min(filteredModels.size(), 10) * 14 + 20 : 40;
         int infoY = dropdownMenuWidget.getY() + textOffset;
 
         String currentModel = AIPlayer.CONFIG.getSelectedLanguageModel();
-        context.text(this.font, "Currently selected: " + (currentModel != null ? currentModel : "None"), centerX - 150, infoY, 0xFF00FF00, true);
-        context.text(this.font, "Showing " + filteredModels.size() + " of " + allModels.size() + " models", centerX - 150, infoY + 15, 0xFFADD8E6, true);
+        context.text(this.font, "Currently selected: " + (currentModel != null ? currentModel : "None"), labelX, infoY, 0xFF00FF00, true);
+        context.text(this.font, "Showing " + filteredModels.size() + " of " + allModels.size() + " models", labelX, infoY + 15, 0xFFADD8E6, true);
 
         String helpText = "Search to filter models • Select a model and click Save";
         context.text(this.font, helpText, centerX - (this.font.width(helpText) / 2), this.height - 65, 0xFFFFB6C1, true);

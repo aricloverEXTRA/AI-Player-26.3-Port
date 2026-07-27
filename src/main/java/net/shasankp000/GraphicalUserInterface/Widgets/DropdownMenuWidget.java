@@ -21,6 +21,7 @@ public class DropdownMenuWidget extends AbstractWidget {
     private List<String> options;
     private boolean isOpen;
     private int selectedIndex = -1;
+    private String selectedOption = "";
     private int hoveredIndex = -1;
     private final int rowHeight = 14; 
     private final int maxVisibleOptions = 10; 
@@ -44,8 +45,9 @@ public class DropdownMenuWidget extends AbstractWidget {
         context.fill(this.getX(), this.getY(), this.getX() + this.width, this.getY() + this.height, 0xFFFFFFFF); 
         context.fill(this.getX() + 1, this.getY() + 1, this.getX() + this.width - 1, this.getY() + this.height - 1, buttonColor);
 
-        String label = (selectedIndex >= 0 && selectedIndex < options.size()) ? options.get(selectedIndex) : getMessage().getString();
-        context.centeredText(tr, label, this.getX() + this.width / 2, this.getY() + (this.height - 8) / 2, 0xFFFFFF);
+        String label = !selectedOption.isBlank() ? selectedOption : getMessage().getString();
+        label = fitTextToWidth(tr, label, this.width - 10);
+        context.text(tr, label, this.getX() + 5, this.getY() + (this.height - 8) / 2, 0xFFFFFFFF, true);
 
         if (isOpen && !options.isEmpty()) {
             context.nextStratum();
@@ -66,7 +68,7 @@ public class DropdownMenuWidget extends AbstractWidget {
                     context.fill(this.getX() + 1, optionY, this.getX() + this.width - 1, optionY + rowHeight, 0xFF3366FF);
                 }
 
-                context.text(tr, options.get(i), this.getX() + 5, optionY + 3, 0xFFFFFF, false);
+                context.text(tr, fitTextToWidth(tr, options.get(i), this.width - 10), this.getX() + 5, optionY + 3, 0xFFFFFFFF, true);
             }
         }
     }
@@ -87,8 +89,9 @@ public class DropdownMenuWidget extends AbstractWidget {
                 
                 if (mouseX >= this.getX() && mouseX <= this.getX() + this.width &&
                     mouseY >= optionY && mouseY < optionY + rowHeight) {
-                    
+
                     this.selectedIndex = i;
+                    this.selectedOption = options.get(i);
                     this.isOpen = false;
                     this.playDownSound(Minecraft.getInstance().getSoundManager());
                     return true; 
@@ -100,7 +103,7 @@ public class DropdownMenuWidget extends AbstractWidget {
 
         if (clickedMain) {
             this.isOpen = !this.isOpen;
-            if (this.isOpen) this.hoveredIndex = 0; 
+            if (this.isOpen) this.hoveredIndex = options.isEmpty() ? -1 : 0;
             this.playDownSound(Minecraft.getInstance().getSoundManager());
             return true;
         }
@@ -114,6 +117,7 @@ public class DropdownMenuWidget extends AbstractWidget {
         if (!this.active || !this.visible || !this.isOpen) return super.keyPressed(event);
 
         int listSize = Math.min(options.size(), maxVisibleOptions);
+        if (listSize == 0) return super.keyPressed(event);
 
         if (keyCode == GLFW.GLFW_KEY_DOWN) {
             this.hoveredIndex = (this.hoveredIndex + 1) % listSize;
@@ -124,6 +128,7 @@ public class DropdownMenuWidget extends AbstractWidget {
         } else if (keyCode == GLFW.GLFW_KEY_ENTER || keyCode == GLFW.GLFW_KEY_KP_ENTER) {
             if (hoveredIndex >= 0 && hoveredIndex < options.size()) {
                 this.selectedIndex = hoveredIndex;
+                this.selectedOption = options.get(hoveredIndex);
                 this.isOpen = false;
                 this.playDownSound(Minecraft.getInstance().getSoundManager());
             }
@@ -143,13 +148,40 @@ public class DropdownMenuWidget extends AbstractWidget {
 
     public void updateOptions(List<String> newOptions) {
         this.options = new ArrayList<>(newOptions);
-        this.hoveredIndex = -1; // Reset hover on search
+        this.hoveredIndex = this.options.isEmpty() ? -1 : 0; // Reset hover on search
+        this.selectedIndex = this.options.indexOf(this.selectedOption);
     }
 
     public String getSelectedOption() {
-        if (selectedIndex >= 0 && selectedIndex < options.size()) {
-            return options.get(selectedIndex);
+        return selectedOption;
+    }
+
+    @Override
+    public boolean isMouseOver(double mouseX, double mouseY) {
+        if (super.isMouseOver(mouseX, mouseY)) {
+            return true;
         }
-        return "";
+        if (!this.isOpen) {
+            return false;
+        }
+
+        int listSize = Math.min(options.size(), maxVisibleOptions);
+        int listTop = this.getY() + this.height;
+        int listBottom = listTop + (listSize * rowHeight);
+        return mouseX >= this.getX() && mouseX < this.getX() + this.width &&
+                mouseY >= listTop && mouseY < listBottom;
+    }
+
+    private static String fitTextToWidth(Font font, String text, int maxWidth) {
+        if (font.width(text) <= maxWidth) {
+            return text;
+        }
+        String ellipsis = "...";
+        int allowedWidth = Math.max(0, maxWidth - font.width(ellipsis));
+        String shortened = text;
+        while (!shortened.isEmpty() && font.width(shortened) > allowedWidth) {
+            shortened = shortened.substring(0, shortened.length() - 1);
+        }
+        return shortened + ellipsis;
     }
 }
