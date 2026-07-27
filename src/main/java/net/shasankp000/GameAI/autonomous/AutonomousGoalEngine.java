@@ -3,7 +3,7 @@ package net.shasankp000.GameAI.autonomous;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonParser;
-import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.level.ServerPlayer;
 import net.shasankp000.AIPlayer;
 import net.shasankp000.FilingSystem.LLMClientFactory;
 import net.shasankp000.GameAI.BotEventHandler;
@@ -186,7 +186,7 @@ public class AutonomousGoalEngine {
         LOGGER.info("[autonomous] Requesting goal plan from LLM (provider={})", llmProvider);
 
         try {
-            ServerPlayerEntity bot = resolveBot();
+            ServerPlayer bot = resolveBot();
             String stateSnapshot = buildStateSnapshot(bot);
 
             String systemPrompt =
@@ -282,7 +282,7 @@ public class AutonomousGoalEngine {
         }
 
         try {
-            ServerPlayerEntity bot = resolveBot();
+            ServerPlayer bot = resolveBot();
             if (bot == null) {
                 LOGGER.warn("[autonomous] Bot '{}' not found on server — skipping goal", botName);
                 return;
@@ -307,40 +307,40 @@ public class AutonomousGoalEngine {
         return true;
     }
 
-    private ServerPlayerEntity resolveBot() {
+    private ServerPlayer resolveBot() {
         if (AIPlayer.serverInstance == null) return null;
-        return AIPlayer.serverInstance.getPlayerManager().getPlayer(botName);
+        return AIPlayer.serverInstance.getPlayerList().getPlayerByName(botName);
     }
 
     /**
      * Builds a compact, LLM-readable snapshot of the bot's current game state.
      * Gracefully degrades when the bot entity is not available.
      */
-    private String buildStateSnapshot(ServerPlayerEntity bot) {
+    private String buildStateSnapshot(ServerPlayer bot) {
         if (bot == null) return "(bot not found — assume fresh spawn, daytime, overworld)";
 
         StringBuilder sb = new StringBuilder();
         sb.append("- Health: ").append(String.format("%.1f", bot.getHealth()))
           .append(" / ").append(String.format("%.1f", bot.getMaxHealth())).append("\n");
-        sb.append("- Hunger: ").append(bot.getHungerManager().getFoodLevel()).append(" / 20\n");
-        sb.append("- Position: ").append(bot.getBlockPos()).append("\n");
-        sb.append("- Dimension: ").append(bot.getWorld().getRegistryKey().getValue()).append("\n");
+        sb.append("- Hunger: ").append(bot.getFoodData().getFoodLevel()).append(" / 20\n");
+        sb.append("- Position: ").append(bot.blockPosition()).append("\n");
+        sb.append("- Dimension: ").append(bot.level().dimension().identifier()).append("\n");
 
-        long timeOfDay = bot.getWorld().getTimeOfDay() % 24000;
+        long timeOfDay = bot.level().getDefaultClockTime() % 24000;
         String period = (timeOfDay < 6000) ? "morning" :
                         (timeOfDay < 12000) ? "afternoon" :
                         (timeOfDay < 13000) ? "sunset" : "night";
         sb.append("- Time: ").append(period).append(" (").append(timeOfDay).append(")\n");
 
         // Main hand item
-        String held = bot.getMainHandStack().isEmpty() ? "nothing"
-                : bot.getMainHandStack().getName().getString();
+        String held = bot.getMainHandItem().isEmpty() ? "nothing"
+                : bot.getMainHandItem().getHoverName().getString();
         sb.append("- Holding: ").append(held).append("\n");
 
         // Inventory item count (non-empty slots)
         int itemCount = 0;
-        for (int i = 0; i < bot.getInventory().size(); i++) {
-            if (!bot.getInventory().getStack(i).isEmpty()) itemCount++;
+        for (int i = 0; i < bot.getInventory().getContainerSize(); i++) {
+            if (!bot.getInventory().getItem(i).isEmpty()) itemCount++;
         }
         sb.append("- Inventory slots used: ").append(itemCount).append(" / 36\n");
 

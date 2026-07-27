@@ -2,9 +2,9 @@ package net.shasankp000.ServiceLLMClients;
 
 import io.github.amithkoujalgi.ollama4j.core.OllamaAPI;
 import io.github.amithkoujalgi.ollama4j.core.types.OllamaModelType;
+import net.minecraft.commands.CommandSourceStack;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.command.ServerCommandSource;
-import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.level.ServerPlayer;
 import net.shasankp000.AIPlayer;
 import net.shasankp000.ChatUtils.ChatUtils;
 import net.shasankp000.ChatUtils.Helper.RAG2;
@@ -70,7 +70,7 @@ public class LLMServiceHandler {
 
     }
 
-    public static void processLLMOutput(String fullResponse, String botName, ServerCommandSource botSource) {
+    public static void processLLMOutput(String fullResponse, String botName, CommandSourceStack botSource) {
         LOGGER.info("processLLMOutput called with response: '{}', botName: '{}'", fullResponse, botName);
 
         if (fullResponse == null || fullResponse.trim().isEmpty()) {
@@ -108,7 +108,7 @@ public class LLMServiceHandler {
     }
 
 
-    public static void sendInitialResponse(ServerCommandSource botSource, LLMClient client) {
+    public static void sendInitialResponse(CommandSourceStack botSource, LLMClient client) {
         MinecraftServer server = botSource.getServer();
         String botName = botSource.getPlayer().getName().getString();
 
@@ -179,12 +179,12 @@ public class LLMServiceHandler {
      */
     public static void runFromChat(String message, String botName, UUID playerUUID, LLMClient client) {
         MinecraftServer server = AIPlayer.serverInstance;
-        ServerPlayerEntity bot = server.getPlayerManager().getPlayer(botName);
+        ServerPlayer bot = server.getPlayerList().getPlayerByName(botName);
         if (bot == null) {
             LOGGER.error("Bot {} not online.", botName);
             return;
         }
-        ServerCommandSource botSource = bot.getCommandSource().withSilent().withMaxLevel(4);
+        CommandSourceStack botSource = bot.createCommandSourceStack().withSuppressedOutput().withMaximumPermission(net.minecraft.server.permissions.PermissionSet.ALL_PERMISSIONS);
 
         server.execute(() -> {
             Thread.currentThread().setName("LLM-Chat-Worker");
@@ -205,7 +205,7 @@ public class LLMServiceHandler {
      * @param playerUUID The player's UUID.
      * @throws Exception if an error occurs during intent routing.
      */
-    private static void routeIntent(String message, ServerCommandSource botSource, UUID playerUUID, LLMClient client) throws Exception {
+    private static void routeIntent(String message, CommandSourceStack botSource, UUID playerUUID, LLMClient client) throws Exception {
         NLPProcessor.Intent intent = NLPProcessor.getIntention(message);
 
         LOGGER.info("📨 Received intent: {}", intent);
