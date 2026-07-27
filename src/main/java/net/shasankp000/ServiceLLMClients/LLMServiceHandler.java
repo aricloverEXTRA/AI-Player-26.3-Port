@@ -8,7 +8,6 @@ import net.shasankp000.ChatUtils.ChatUtils;
 import net.shasankp000.ChatUtils.Helper.RAG2;
 import net.shasankp000.ChatUtils.NLPProcessor;
 import net.shasankp000.Database.SQLiteDB;
-import net.shasankp000.Exception.intentMisclassification;
 import net.shasankp000.FunctionCaller.FunctionCallerV2;
 import net.shasankp000.Overlay.ThinkingStateManager;
 import org.slf4j.Logger;
@@ -251,7 +250,8 @@ public class LLMServiceHandler {
                         LOGGER.info("✅ Finished FunctionCallerV2 retry worker thread");
                     });
                 } else {
-                    throw new intentMisclassification("LLM failed to classify intent.");
+                    LOGGER.warn("⚠️ Intent remained unclear after retry.");
+                    ChatUtils.sendChatMessages(botSource, "I couldn't understand that clearly. Please try rephrasing.");
                 }
             }
         }

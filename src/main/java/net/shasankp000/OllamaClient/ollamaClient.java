@@ -15,10 +15,11 @@ import net.shasankp000.ChatUtils.ChatUtils;
 import net.shasankp000.ChatUtils.Helper.RAG2;
 import net.shasankp000.ChatUtils.NLPProcessor;
 import net.shasankp000.Database.SQLiteDB;
-import net.shasankp000.Exception.intentMisclassification;
+import net.shasankp000.FilingSystem.LLMClientFactory;
 import net.shasankp000.FunctionCaller.FunctionCallerV2;
 import net.shasankp000.GameAI.autonomous.AutonomousManager;
 import net.shasankp000.Overlay.ThinkingStateManager;
+import net.shasankp000.ServiceLLMClients.LLMClient;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -162,6 +163,7 @@ public class ollamaClient {
 
     private static void routeIntent(String message, CommandSourceStack botSource, UUID playerUUID) throws Exception {
         NLPProcessor.Intent intent = NLPProcessor.getIntention(message);
+        LLMClient configuredClient = createConfiguredServiceClient();
 
         LOGGER.info("\uD83D\uDCE8 Received intent: {}", intent);
 
@@ -170,7 +172,11 @@ public class ollamaClient {
                 BOT_TASK_POOL.submit(() -> {
                     Thread.currentThread().setName("RAG2-Worker");
                     LOGGER.info("\uD83E\uDDF5 Started RAG2 worker thread");
-                    RAG2.run(message, botSource, intent);
+                    if (configuredClient != null) {
+                        RAG2.run(message, botSource, intent, configuredClient);
+                    } else {
+                        RAG2.run(message, botSource, intent);
+                    }
                     LOGGER.info("\u2705 Finished RAG2 worker thread");
                 });
             }
@@ -180,7 +186,11 @@ public class ollamaClient {
                     Thread.currentThread().setName("Function-Caller-Worker");
                     LOGGER.info("\uD83E\uDDF5 Started FunctionCallerV2 worker thread");
                     new FunctionCallerV2(botSource, playerUUID);
-                    FunctionCallerV2.run(message);
+                    if (configuredClient != null) {
+                        FunctionCallerV2.run(message, configuredClient);
+                    } else {
+                        FunctionCallerV2.run(message);
+                    }
                     LOGGER.info("\u2705 Finished FunctionCallerV2 worker thread");
                 });
             }
@@ -189,7 +199,9 @@ public class ollamaClient {
                 LOGGER.warn("\u26a0\ufe0f Intent unclear, retrying with LLM classification...");
                 ChatUtils.sendChatMessages(botSource, "\uD83D\uDD0D Reanalyzing...");
 
-                NLPProcessor.Intent retry = retryIntentLLM(message);
+                NLPProcessor.Intent retry = configuredClient != null
+                        ? NLPProcessor.getIntentionFromLLM(message, configuredClient)
+                        : retryIntentLLM(message);
 
                 LOGGER.info("\uD83D\uDCE8 Retry intent: {}", retry);
 
@@ -197,7 +209,11 @@ public class ollamaClient {
                     BOT_TASK_POOL.submit(() -> {
                         Thread.currentThread().setName("RAG2-Retry-Worker");
                         LOGGER.info("\uD83E\uDDF5 Started RAG2 retry worker thread");
-                        RAG2.run(message, botSource, retry);
+                        if (configuredClient != null) {
+                            RAG2.run(message, botSource, retry, configuredClient);
+                        } else {
+                            RAG2.run(message, botSource, retry);
+                        }
                         LOGGER.info("\u2705 Finished RAG2 retry worker thread");
                     });
                 } else if (retry == NLPProcessor.Intent.REQUEST_ACTION) {
@@ -205,14 +221,31 @@ public class ollamaClient {
                         Thread.currentThread().setName("Function-Caller-Retry-Worker");
                         LOGGER.info("\uD83E\uDDF5 Started FunctionCallerV2 retry worker thread");
                         new FunctionCallerV2(botSource, playerUUID);
-                        FunctionCallerV2.run(message);
+                        if (configuredClient != null) {
+                            FunctionCallerV2.run(message, configuredClient);
+                        } else {
+                            FunctionCallerV2.run(message);
+                        }
                         LOGGER.info("\u2705 Finished FunctionCallerV2 worker thread");
                     });
                 } else {
-                    throw new intentMisclassification("LLM failed to classify intent.");
+                    LOGGER.warn("\u26a0\ufe0f Intent remained unclear after retry.");
+                    ChatUtils.sendChatMessages(botSource, "I couldn't understand that clearly. Please try rephrasing.");
                 }
             }
         }
+    }
+
+    private static LLMClient createConfiguredServiceClient() {
+        String llmProvider = System.getProperty("aiplayer.llmMode", "custom");
+        if ("ollama".equalsIgnoreCase(llmProvider)) {
+            return null;
+        }
+        LLMClient client = LLMClientFactory.createClient(llmProvider);
+        if (client == null) {
+            LOGGER.warn("No service LLM client available for provider '{}'; falling back to Ollama path.", llmProvider);
+        }
+        return client;
     }
 
     private static NLPProcessor.Intent retryIntentLLM(String message) {

@@ -956,6 +956,11 @@ public class FunctionCallerV2 {
         try {
             response = client.sendPrompt(fullSystemPrompt, userPrompt);
             logger.info("Raw LLM Response: {}", response);
+            if (response == null || response.isBlank() || response.startsWith("Error:")) {
+                logger.error("Function caller provider returned no usable response: {}", response);
+                sendMessageToPlayer("I couldn't plan that action because the AI provider returned an empty response. Please try another model.");
+                return;
+            }
             String cleanedResponse = stripThinkBlock(response);
             String jsonPart = extractJson(cleanedResponse);
             logger.info("Extracted JSON: {}", jsonPart);

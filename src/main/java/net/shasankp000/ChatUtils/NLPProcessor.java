@@ -565,8 +565,83 @@ public class NLPProcessor {
             LOGGER.error("Error while resolving the final decision: {}", e.getMessage());
         }
 
-        return Intent.valueOf(decision);
+        Intent resolvedIntent = parseIntentOrUnspecified(decision);
+        if (resolvedIntent != Intent.UNSPECIFIED) {
+            return resolvedIntent;
+        }
 
+        Intent localFallback = chooseLocalClassifierFallback(
+                bertLabel, bertClassificationConfidence,
+                cartLabel, cartClassificationConfidence,
+                LIDSNetLabel, LIDSNetClassificationConfidence
+        );
+        if (localFallback != Intent.UNSPECIFIED) {
+            LOGGER.warn("Intent resolver did not return a usable decision. Using local classifier fallback: {}", localFallback);
+            return localFallback;
+        }
+
+        return Intent.UNSPECIFIED;
+
+    }
+
+    private static Intent parseIntentOrUnspecified(String decision) {
+        if (decision == null || decision.isBlank()) {
+            LOGGER.warn("Intent resolver returned an empty decision. Falling back to UNSPECIFIED.");
+            return Intent.UNSPECIFIED;
+        }
+
+        String normalizedDecision = decision.trim();
+        try {
+            return Intent.valueOf(normalizedDecision);
+        } catch (IllegalArgumentException e) {
+            LOGGER.warn("Intent resolver returned unsupported decision '{}'. Falling back to UNSPECIFIED.", normalizedDecision);
+            return Intent.UNSPECIFIED;
+        }
+    }
+
+    private static Intent chooseLocalClassifierFallback(
+            String bertLabel, double bertConfidence,
+            String cartLabel, double cartConfidence,
+            String lidsNetLabel, double lidsNetConfidence
+    ) {
+        Intent bestIntent = Intent.UNSPECIFIED;
+        double bestConfidence = 0.0;
+
+        double normalizedBertConfidence = normalizeConfidence(bertConfidence);
+        if (normalizedBertConfidence > bestConfidence && isSupportedIntentLabel(bertLabel)) {
+            bestIntent = Intent.valueOf(bertLabel);
+            bestConfidence = normalizedBertConfidence;
+        }
+
+        double normalizedCartConfidence = normalizeConfidence(cartConfidence);
+        if (normalizedCartConfidence > bestConfidence && isSupportedIntentLabel(cartLabel)) {
+            bestIntent = Intent.valueOf(cartLabel);
+            bestConfidence = normalizedCartConfidence;
+        }
+
+        double normalizedLidsNetConfidence = normalizeConfidence(lidsNetConfidence);
+        if (normalizedLidsNetConfidence > bestConfidence && isSupportedIntentLabel(lidsNetLabel)) {
+            bestIntent = Intent.valueOf(lidsNetLabel);
+            bestConfidence = normalizedLidsNetConfidence;
+        }
+
+        return bestConfidence >= 0.60 ? bestIntent : Intent.UNSPECIFIED;
+    }
+
+    private static double normalizeConfidence(double confidence) {
+        return confidence > 1.0 ? confidence / 100.0 : confidence;
+    }
+
+    private static boolean isSupportedIntentLabel(String label) {
+        if (label == null || label.isBlank()) {
+            return false;
+        }
+        try {
+            Intent.valueOf(label.trim());
+            return true;
+        } catch (IllegalArgumentException e) {
+            return false;
+        }
     }
 
 
