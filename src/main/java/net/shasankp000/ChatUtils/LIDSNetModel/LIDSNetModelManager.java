@@ -7,9 +7,6 @@ import ai.djl.modality.Classifications;
 import ai.djl.repository.zoo.Criteria;
 import ai.djl.repository.zoo.ZooModel;
 import ai.djl.training.util.ProgressBar;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.List;
@@ -18,14 +15,12 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 public class LIDSNetModelManager {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger("LIDSNetModelManager");
     private static LIDSNetModelManager instance;
     private final ReentrantReadWriteLock lock = new ReentrantReadWriteLock();
     private ZooModel<float[], Classifications> lidsnetModel;
     private Predictor<float[], Classifications> predictor;
     private boolean isModelLoaded = false;
     private volatile boolean isLoadingInProgress = false;
-    private volatile String unavailableReason = null;
     private static Path modelDir = null;
 
     private LIDSNetModelManager() {}
@@ -51,12 +46,6 @@ public class LIDSNetModelManager {
         // Quick check without lock
         if (isModelLoaded) return;
 
-        if (isCurrentPlatformUnsupported()) {
-            unavailableReason = "DJL PyTorch 0.33.0 no longer provides native libraries for macOS x86_64.";
-            LOGGER.warn("Skipping LIDSNet model load: {}", unavailableReason);
-            return;
-        }
-
         lock.writeLock().lock();
         try {
             if (isModelLoaded || isLoadingInProgress) return;
@@ -81,8 +70,7 @@ public class LIDSNetModelManager {
             System.out.println("LIDSNet model loaded successfully and ready for inference.");
 
         } catch (Exception e) {
-            unavailableReason = e.getMessage();
-            throw new RuntimeException("LIDSNet model load failed", e);
+            throw new RuntimeException(e);
         } finally {
             isLoadingInProgress = false;
             lock.writeLock().unlock();
@@ -106,9 +94,6 @@ public class LIDSNetModelManager {
                 loadModel(classNames);
                 lock.readLock().lock();
             }
-            if (predictor == null) {
-                throw new IllegalStateException("LIDSNet model is unavailable: " + getUnavailableReason());
-            }
             return predictor;
         } finally {
             lock.readLock().unlock();
@@ -123,29 +108,10 @@ public class LIDSNetModelManager {
                 loadModel(classNames);
                 lock.readLock().lock();
             }
-            if (predictor == null) {
-                throw new IllegalStateException("LIDSNet model is unavailable: " + getUnavailableReason());
-            }
             return predictor.predict(featureVector);
         } finally {
             lock.readLock().unlock();
         }
-    }
-
-    public boolean isModelAvailable() {
-        return unavailableReason == null;
-    }
-
-    public String getUnavailableReason() {
-        return unavailableReason == null ? "unknown reason" : unavailableReason;
-    }
-
-    private static boolean isCurrentPlatformUnsupported() {
-        String osName = System.getProperty("os.name", "").toLowerCase(java.util.Locale.ROOT);
-        String osArch = System.getProperty("os.arch", "").toLowerCase(java.util.Locale.ROOT);
-        boolean isMac = osName.contains("mac") || osName.contains("darwin");
-        boolean isX86_64 = osArch.equals("x86_64") || osArch.equals("amd64");
-        return isMac && isX86_64;
     }
 
     // Optional: result wrapper

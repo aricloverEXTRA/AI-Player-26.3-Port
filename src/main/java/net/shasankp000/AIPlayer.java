@@ -134,18 +134,10 @@ public class AIPlayer implements ModInitializer {
 
 			try {
 				modelManager.loadModel();
-				loadedBERTModelIntoMemory = modelManager.isModelLoaded();
-				if (loadedBERTModelIntoMemory) {
-					LOGGER.info("BERT model loaded into memory. It will stay in memory as long as any bot stays active in game.");
-				}
-				else {
-					LOGGER.warn("BERT model was not loaded. Local intent detection will continue without BERT: {}", modelManager.getUnavailableReason());
-				}
+				loadedBERTModelIntoMemory = true;
+				LOGGER.info("BERT model loaded into memory. It will stay in memory as long as any bot stays active in game.");
 			} catch (IOException | ModelException e) {
 				LOGGER.error("BERT Model loading failed! {}", e.getMessage());
-			} catch (RuntimeException e) {
-				loadedBERTModelIntoMemory = false;
-				LOGGER.error("BERT Model loading failed; continuing without BERT intent detection.", e);
 			}
 
 
