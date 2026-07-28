@@ -1,7 +1,7 @@
 plugins {
-	id 'fabric-loom' version "${loom_version}"
+	id 'net.fabricmc.fabric-loom' version "${loom_version}"
 	id 'maven-publish'
-	id 'com.github.johnrengelman.shadow' version '7.1.2'
+	id 'com.gradleup.shadow' version '9.4.1'
 }
 
 version = project.mod_version
@@ -15,6 +15,17 @@ repositories {
 	mavenCentral()
 	maven { url 'https://jitpack.io' }
 	maven { url 'https://maven.wispforest.io/releases/' }
+	exclusiveContent {
+		forRepository {
+			maven {
+				name = "Modrinth"
+				url = "https://api.modrinth.com/maven"
+			}
+		}
+		filter {
+			includeGroup "maven.modrinth"
+		}
+	}
 	flatDir {
 		dirs "./lib"
 	}
@@ -36,10 +47,9 @@ loom {
 dependencies {
 	// Core Minecraft/Fabric
 	minecraft "com.mojang:minecraft:${project.minecraft_version}"
-	mappings "net.fabricmc:yarn:${project.yarn_mappings}:v2"
-	modImplementation "net.fabricmc:fabric-loader:${project.loader_version}"
-	modImplementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
-	modImplementation 'com.github.gnembon:fabric-carpet:1.4.147'
+	implementation "net.fabricmc:fabric-loader:${project.loader_version}"
+	implementation "net.fabricmc.fabric-api:fabric-api:${project.fabric_version}"
+	implementation "maven.modrinth:TQTTVgYE:bGrLxJ8v"
 
 	// Core application dependencies
 	implementation 'com.github.amithkoujalgi:ollama4j:1.0.77'
@@ -105,13 +115,14 @@ processResources {
 }
 
 tasks.withType(JavaCompile).configureEach {
-	it.options.release = 21
+	it.options.release = 25
 }
 
 java {
 	withSourcesJar()
-	sourceCompatibility = JavaVersion.VERSION_21
-	targetCompatibility = JavaVersion.VERSION_21
+	toolchain {
+		languageVersion = JavaLanguageVersion.of(25)
+	}
 }
 
 jar {

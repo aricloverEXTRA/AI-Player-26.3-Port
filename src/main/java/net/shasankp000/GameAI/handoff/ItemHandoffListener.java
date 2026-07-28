@@ -1,9 +1,9 @@
 package net.shasankp000.GameAI.handoff;
 
-import net.minecraft.entity.ItemEntity;
-import net.minecraft.entity.player.PlayerEntity;
-import net.minecraft.item.ItemStack;
-import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.entity.item.ItemEntity;
+import net.minecraft.world.entity.player.Player;
+import net.minecraft.world.item.ItemStack;
 import net.shasankp000.GameAI.BotEventHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,10 +11,10 @@ import org.slf4j.LoggerFactory;
 /**
  * Routes bot item-pickup events to {@link ItemHandoffHandler}.
  *
- * <p>In Fabric API 0.116.9+1.21.1 {@code PlayerPickupItemCallback} no longer
+ * <p>In Fabric API 0.155.2+26.2 {@code PlayerPickupItemCallback} no longer
  * exists.  Detection is done via {@link net.shasankp000.mixin.PlayerPickupMixin},
  * which injects into {@code PlayerEntity.pickUpItem(ItemEntity, int)} and
- * calls {@link #dispatch(PlayerEntity, ItemEntity)} directly.
+ * calls {@link #dispatch(Player, ItemEntity)} directly.
  *
  * <p>Call {@link #register()} once from {@code AIPlayer.onInitialize()} so
  * the registered flag is set and log messages appear as expected.
@@ -46,47 +46,30 @@ public final class ItemHandoffListener {
      * @param picker     the player who picked up the item
      * @param itemEntity the item that was picked up
      */
-    public static void dispatch(PlayerEntity picker, ItemEntity itemEntity) {
+    public static void dispatch(Player picker, ItemEntity itemEntity) {
         if (!registered) return;
-        if (!(picker instanceof ServerPlayerEntity serverPlayer)) return;
+        if (!(picker instanceof ServerPlayer serverPlayer)) return;
         if (BotEventHandler.bot == null) return;
-        if (!serverPlayer.getUuid().equals(BotEventHandler.bot.getUuid())) return;
+        if (!serverPlayer.getUUID().equals(BotEventHandler.bot.getUUID())) return;
 
-        ItemStack stack = itemEntity.getStack();
+        ItemStack stack = itemEntity.getItem();
         if (stack.isEmpty()) return;
 
         // Resolve the original thrower.
-        // In 1.21.1, ItemEntity no longer exposes getThrower().
+        // In 26.2, ItemEntity no longer exposes getThrower().
         // We use getOwner() as the primary signal (set when a player throws an item)
         // and fall back to checking the entity's NBT thrower UUID via the owner entity.
-        ServerPlayerEntity thrower = null;
+        ServerPlayer thrower = null;
 
         // Primary: getOwner() returns the entity that "owns" the item (set on throw)
-        if (itemEntity.getOwner() instanceof ServerPlayerEntity ownerPlayer
-                && !ownerPlayer.getUuid().equals(serverPlayer.getUuid())) {
+        if (itemEntity.getOwner() instanceof ServerPlayer ownerPlayer
+                && !ownerPlayer.getUUID().equals(serverPlayer.getUUID())) {
             thrower = ownerPlayer;
-        }
-
-        // Fallback: scan the item entity's NBT for the Thrower UUID written by vanilla
-        // (net.minecraft.entity.ItemEntity stores it under the "Thrower" key).
-        if (thrower == null) {
-            net.minecraft.nbt.NbtCompound nbt = new net.minecraft.nbt.NbtCompound();
-            itemEntity.writeNbt(nbt);
-            if (nbt.containsUuid("Thrower")) {
-                java.util.UUID throwerId = nbt.getUuid("Thrower");
-                net.minecraft.server.MinecraftServer srv = serverPlayer.getServer();
-                if (srv != null && !throwerId.equals(serverPlayer.getUuid())) {
-                    ServerPlayerEntity candidate = srv.getPlayerManager().getPlayer(throwerId);
-                    if (candidate != null) {
-                        thrower = candidate;
-                    }
-                }
-            }
         }
 
         LOGGER.debug("[handoff-listener] bot '{}' picked up '{}' (thrower={})",
                 serverPlayer.getName().getString(),
-                stack.getName().getString(),
+                stack.getHoverName().getString(),
                 thrower != null ? thrower.getName().getString() : "none");
 
         ItemHandoffHandler.onBotPickedUpItem(serverPlayer, thrower, stack);
