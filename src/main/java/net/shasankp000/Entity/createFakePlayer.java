@@ -21,7 +21,6 @@ import net.minecraft.network.packet.s2c.play.EntitySetHeadYawS2CPacket;
 import net.minecraft.network.packet.s2c.play.PositionFlag;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.ServerTask;
 import net.minecraft.server.network.ConnectedClientData;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
@@ -34,8 +33,11 @@ import net.minecraft.world.GameMode;
 import net.minecraft.world.TeleportTarget;
 import net.minecraft.world.World;
 
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -148,7 +150,11 @@ public class createFakePlayer extends ServerPlayerEntity {
     private static CompletableFuture<Optional<GameProfile>> fetchGameProfile(final String name) {
         return CompletableFuture.supplyAsync(() -> {
             try {
-                URL url = new URL("https://api.mojang.com/users/profiles/minecraft/" + name);
+                URI uri = new URI("https://api.mojang.com/users/profiles/minecraft/" + name);
+                if (!uri.isAbsolute()) {
+                    throw new IllegalArgumentException("Invalid URI: " + name);
+                }
+                URL url = uri.toURL();
                 HttpURLConnection connection = (HttpURLConnection) url.openConnection();
                 connection.setRequestMethod("GET");
 
@@ -159,7 +165,9 @@ public class createFakePlayer extends ServerPlayerEntity {
                         return Optional.ofNullable(profile);
                     }
                 }
-            } catch (Exception e) {
+            } catch (URISyntaxException e) {
+                throw new IllegalArgumentException("Invalid URI: " + name, e);
+            } catch (IOException e) {
                 LOGGER.error("Player {} was not found on mojang's servers. {}", name, e.getMessage());
                 throw new RuntimeException(e);
             }

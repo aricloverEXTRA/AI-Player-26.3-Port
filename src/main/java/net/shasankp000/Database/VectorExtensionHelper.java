@@ -6,7 +6,7 @@ import org.slf4j.LoggerFactory;
 import org.sqlite.Function;
 
 import java.io.*;
-import java.net.URL;
+import java.net.URI;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.*;
@@ -121,7 +121,7 @@ public class VectorExtensionHelper {
         Path gzPath  = vecDir.resolve("sqlite-vec.tar.gz");
         Path tarPath = vecDir.resolve("sqlite-vec.tar");
 
-        try (InputStream in = new URL(downloadUrl).openStream()) {
+        try (InputStream in = URI.create(downloadUrl).toURL().openStream()) {
             Files.copy(in, gzPath, StandardCopyOption.REPLACE_EXISTING);
         }
         try (GZIPInputStream gzipIn = new GZIPInputStream(Files.newInputStream(gzPath));
@@ -190,7 +190,7 @@ public class VectorExtensionHelper {
         Path gzPath  = vssDir.resolve("sqlite-vss.tar.gz");
         Path tarPath = vssDir.resolve("sqlite-vss.tar");
 
-        try (InputStream in = new URL(downloadUrl).openStream()) {
+        try (InputStream in = URI.create(downloadUrl).toURL().openStream()) {
             Files.copy(in, gzPath, StandardCopyOption.REPLACE_EXISTING);
         }
         try (GZIPInputStream gzipIn = new GZIPInputStream(Files.newInputStream(gzPath));

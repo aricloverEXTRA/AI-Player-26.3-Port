@@ -3,10 +3,13 @@ package net.shasankp000.GameAI.handoff;
 import net.minecraft.entity.ItemEntity;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.item.ItemStack;
+import net.minecraft.registry.Registries;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.shasankp000.GameAI.BotEventHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Routes bot item-pickup events to {@link ItemHandoffHandler}.
@@ -22,6 +25,11 @@ import org.slf4j.LoggerFactory;
 public final class ItemHandoffListener {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("item-handoff-listener");
+
+    /** Debounce window so one physical pickup does not fire multiple reactions. */
+    private static final long HANDOFF_DEBOUNCE_MS = 1500L;
+
+    private static final ConcurrentHashMap<String, Long> LAST_HANDOFF = new ConcurrentHashMap<>();
 
     private ItemHandoffListener() {}
 
@@ -55,6 +63,16 @@ public final class ItemHandoffListener {
         ItemStack stack = itemEntity.getStack();
         if (stack.isEmpty()) return;
 
+        // Debounce: same bot + same item type within HANDOFF_DEBOUNCE_MS → ignore
+        String debounceKey = serverPlayer.getUuid() + "|" + Registries.ITEM.getId(stack.getItem());
+        long now = System.currentTimeMillis();
+        Long last = LAST_HANDOFF.get(debounceKey);
+        if (last != null && (now - last) < HANDOFF_DEBOUNCE_MS) {
+            LOGGER.debug("[handoff-listener] debounced pickup of '{}'", stack.getName().getString());
+            return;
+        }
+        LAST_HANDOFF.put(debounceKey, now);
+
         // Resolve the original thrower.
         // In 1.21.1, ItemEntity no longer exposes getThrower().
         // We use getOwner() as the primary signal (set when a player throws an item)
@@ -69,19 +87,11 @@ public final class ItemHandoffListener {
 
         // Fallback: scan the item entity's NBT for the Thrower UUID written by vanilla
         // (net.minecraft.entity.ItemEntity stores it under the "Thrower" key).
+        // Note: reading from a fresh empty NbtCompound never worked; only getOwner()
+        // is reliable on 1.21.x, so this block intentionally stays a no-op if owner was null.
         if (thrower == null) {
-            net.minecraft.nbt.NbtCompound nbt = new net.minecraft.nbt.NbtCompound();
-            java.util.Optional<java.util.UUID> throwerUuidOpt = nbt.get("Thrower", net.minecraft.util.Uuids.INT_STREAM_CODEC);
-            if (throwerUuidOpt.isPresent()) {
-                java.util.UUID throwerId = throwerUuidOpt.get();
-                net.minecraft.server.MinecraftServer srv = serverPlayer.getServer();
-                if (srv != null && !throwerId.equals(serverPlayer.getUuid())) {
-                    ServerPlayerEntity candidate = srv.getPlayerManager().getPlayer(throwerId);
-                    if (candidate != null) {
-                        thrower = candidate;
-                    }
-                }
-            }
+            // Reserved for a future data-component / entity-data path if Mojang exposes
+            // thrower UUID again without getOwner().
         }
 
         LOGGER.debug("[handoff-listener] bot '{}' picked up '{}' (thrower={})",
