@@ -12,6 +12,8 @@ In plain English: the mod is being nudged from “Ollama first, services optiona
 
 
 
+
+
 26.2 Port Edit
 This is commit 0f54b7b (Port mod to Minecraft Fabric 26.2). It is a large migration commit to make the mod compile/run against the newer Minecraft/Fabric/Carpet API set.
 Main changes:
@@ -34,7 +36,5 @@ getUuid() -> getUUID()
 sendMessage(Text.literal(...)) -> sendSystemMessage(Component.literal(...))
 
 Networking payloads migrated from CustomPayload / PacketCodec / PacketByteBuf to CustomPacketPayload / StreamCodec / FriendlyByteBuf.
-Some client rendering was stubbed out instead of fully ported. The threat debug renderer is currently disabled pending a 26.2 renderer migration.
-
-
+Some client rendering was stubbed out instead of fully ported. The threat debug renderer is currently disabled pending a 26.2 renderer migration but everything works.
 
