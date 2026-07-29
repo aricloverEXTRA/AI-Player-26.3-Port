@@ -6,7 +6,7 @@ import net.minecraft.world.World;
 public class GetTime {
     public static int getTimeOfWorld(ServerPlayerEntity bot) {
 
-        World GameWorld = bot.getServerWorld();
+        World GameWorld = bot.getWorld();
 
         long timeOfDay = GameWorld.getTimeOfDay() % 24000; // Normalize to one day cycle
 

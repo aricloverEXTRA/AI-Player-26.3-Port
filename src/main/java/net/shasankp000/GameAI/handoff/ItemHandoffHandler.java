@@ -66,22 +66,25 @@ public final class ItemHandoffHandler {
     // -----------------------------------------------------------------------
     // Chat reaction pools
     // -----------------------------------------------------------------------
+    // All templates use String.format(template, throwerName, itemName)
+    // i.e. first %s = thrower, second %s = item.
 
     private static final Map<ItemTier, List<String>> REACTIONS = Map.of(
         ItemTier.LEGENDARY, List.of(
             "Oh wow — %s just gave me a %s! I... I can't believe it! 🤩",
-            "Wait, is this actually a %s?! %s you absolute legend!! 🎉",
-            "A %s?! From %s?! My day just got SO much better! ✨"
+            "Wait, is this actually a %s from %s?! You absolute legend!! 🎉",
+            "A %s from %s?! My day just got SO much better! ✨"
         ),
         ItemTier.EPIC, List.of(
             "%s gave me a %s — nice one! Really appreciate that 😄",
-            "Oh, a %s! Thanks %s, this will come in very handy!",
+            "Oh, a %s from %s! This will come in very handy!",
             "Ooh, %s dropped a %s for me! That's pretty epic 🔥"
         ),
         ItemTier.RARE, List.of(
             "Thanks %s, I'll make good use of that %s!",
             "%s tossed me a %s — cheers! 👍",
-            "A %s, nice. Appreciated, %s!"
+            "A %s from %s — appreciated!",
+            "%s, nice. Appreciated, %s!"
         ),
         ItemTier.COMMON, List.of(
             "Got a %s from %s, cool.",

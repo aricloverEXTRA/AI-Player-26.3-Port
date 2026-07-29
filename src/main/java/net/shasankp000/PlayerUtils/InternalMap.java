@@ -49,7 +49,7 @@ public class InternalMap {
             for (int dx = -horizontalRange; dx <= horizontalRange; dx++) {
                 for (int dz = -horizontalRange; dz <= horizontalRange; dz++) {
                     BlockPos pos = botPos.add(dx, dy, dz);
-                    Block block = player.getEntityWorld().getBlockState(pos).getBlock();
+                    Block block = player.getWorld().getBlockState(pos).getBlock();
                     // Store the block in the map array at the corresponding shifted indices.
                     map[dy + verticalRange][dx + horizontalRange][dz + horizontalRange] = block;
                 }

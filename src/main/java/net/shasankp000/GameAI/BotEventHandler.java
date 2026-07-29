@@ -1600,25 +1600,26 @@ public class BotEventHandler {
             net.minecraft.item.ItemStack offHand = player.getOffHandStack();
 
             // Check for weapons
-            if (mainHand.getItem() instanceof net.minecraft.item.SwordItem) {
+            if (mainHand.isIn(net.minecraft.registry.tag.ItemTags.SWORDS)) {
                 baseThreat += 15.0; // Sword wielding player
-            } else if (mainHand.getItem() instanceof net.minecraft.item.AxeItem) {
+            } else if (mainHand.isIn(net.minecraft.registry.tag.ItemTags.AXES)) {
                 baseThreat += 12.0; // Axe wielding player
-            } else if (mainHand.getItem() instanceof net.minecraft.item.BowItem ||
-                      mainHand.getItem() instanceof net.minecraft.item.CrossbowItem) {
+            } else if (mainHand.isOf(net.minecraft.item.Items.BOW) ||
+                      mainHand.isOf(net.minecraft.item.Items.CROSSBOW)) {
                 baseThreat += 20.0; // Ranged weapon - very dangerous
-            } else if (mainHand.getItem() instanceof net.minecraft.item.TridentItem) {
+            } else if (mainHand.isOf(net.minecraft.item.Items.TRIDENT)) {
                 baseThreat += 18.0; // Trident
             }
 
             // Check for shield (defensive capability)
-            if (offHand.getItem() instanceof net.minecraft.item.ShieldItem) {
+            if (mainHand.isOf(net.minecraft.item.Items.SHIELD) || offHand.isOf(net.minecraft.item.Items.SHIELD)) {
                 baseThreat += 8.0; // Player with shield is more dangerous
             }
 
             // Check armor (increases survivability = higher threat)
             int armorPieces = 0;
-            for (net.minecraft.item.ItemStack armorSlot : player.getArmorItems()) {
+            for (int i = 0; i < 4; i++) {
+                net.minecraft.item.ItemStack armorSlot = player.getInventory().getStack(net.minecraft.entity.player.PlayerInventory.MAIN_SIZE + i);
                 if (!armorSlot.isEmpty()) {
                     armorPieces++;
                     // Diamond/Netherite armor is particularly dangerous

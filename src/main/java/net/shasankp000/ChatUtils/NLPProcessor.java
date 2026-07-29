@@ -18,6 +18,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.*;
 import java.net.MalformedURLException;
+import java.net.URI;
 import java.net.URL;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -98,7 +99,7 @@ public class NLPProcessor {
                 net.shasankp000.Overlay.NLPDownloadProgressManager.updateProgress("Downloading BERT NLP model...", currentStepNum);
                 LOGGER.info("📥 BERT NLP model not found — downloading for first-time setup...");
 
-                try (InputStream in = new URL(bertModelURL).openStream()) {
+                try (InputStream in = URI.create(bertModelURL).toURL().openStream()) {
                     Files.copy(in, torchZipFile, StandardCopyOption.REPLACE_EXISTING);
                 }
 
@@ -115,7 +116,7 @@ public class NLPProcessor {
 
                         Files.deleteIfExists(torchZipFile);
 
-                        try (InputStream in = new URL(bertModelURL).openStream()) {
+                        try (InputStream in = URI.create(bertModelURL).toURL().openStream()) {
                             Files.copy(in, torchZipFile, StandardCopyOption.REPLACE_EXISTING);
                         }
 
@@ -157,7 +158,7 @@ public class NLPProcessor {
                 net.shasankp000.Overlay.NLPDownloadProgressManager.updateProgress("Downloading CART NLP model...", currentStepNum);
                 LOGGER.info("📥 CART NLP model not found — downloading for first-time setup...");
 
-                try (InputStream in = new URL(cartZipURL).openStream()) {
+                try (InputStream in = URI.create(cartZipURL).toURL().openStream()) {
                     Files.copy(in, cartZipFile, StandardCopyOption.REPLACE_EXISTING);
                 }
 
@@ -177,7 +178,7 @@ public class NLPProcessor {
 
                         Files.deleteIfExists(cartZipFile);
 
-                        try (InputStream in = new URL(cartZipURL).openStream()) {
+                        try (InputStream in = URI.create(cartZipURL).toURL().openStream()) {
                             Files.copy(in, cartZipFile, StandardCopyOption.REPLACE_EXISTING);
                         }
 
@@ -217,7 +218,7 @@ public class NLPProcessor {
                     String expectedSha512 = entry.getValue();
 
                     try {
-                        URL url = new URL(modelURL);
+                        URL url = URI.create(modelURL).toURL();
                         String fileName = Paths.get(url.getPath()).getFileName().toString();
 
                         Path targetFilePath = openNlpModelsDir.resolve(fileName);
@@ -252,7 +253,7 @@ public class NLPProcessor {
                 net.shasankp000.Overlay.NLPDownloadProgressManager.updateProgress("Downloading LIDSNet model...", currentStepNum);
                 LOGGER.info("📥 LIDSNet NLP model not found — downloading for first-time setup...");
 
-                try (InputStream in = new URL(LIDSNetModelURL).openStream()) {
+                try (InputStream in = URI.create(LIDSNetModelURL).toURL().openStream()) {
                     Files.copy(in, LidsNETZipFile, StandardCopyOption.REPLACE_EXISTING);
                 }
 
@@ -269,7 +270,7 @@ public class NLPProcessor {
 
                         Files.deleteIfExists(LidsNETZipFile);
 
-                        try (InputStream in = new URL(LIDSNetModelURL).openStream()) {
+                        try (InputStream in = URI.create(LIDSNetModelURL).toURL().openStream()) {
                             Files.copy(in, LidsNETZipFile, StandardCopyOption.REPLACE_EXISTING);
                         }
 
@@ -613,6 +614,7 @@ public class NLPProcessor {
         return Intent.UNSPECIFIED;
     }
 
+    @SuppressWarnings("unused")
     private static String stripThinkTags(String input) {
         return input.replaceAll("(?s)<think>.*?</think>", "").trim();
     }
@@ -795,3 +797,4 @@ public class NLPProcessor {
     }
 
 }
+

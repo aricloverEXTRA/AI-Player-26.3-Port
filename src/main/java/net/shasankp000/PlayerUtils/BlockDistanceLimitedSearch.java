@@ -46,7 +46,7 @@ public class BlockDistanceLimitedSearch {
                     BlockPos pos = botPos.add(dx, dy, dz);
                     if (canReachBlock(pos)) {
                         // Get the block's name and add it to the list.
-                        Block block = player.getEntityWorld().getBlockState(pos).getBlock();
+                        Block block = player.getWorld().getBlockState(pos).getBlock();
                         String blockName = block.getName().getString();
                         reachableBlockNames.add(blockName);
                     }
@@ -63,7 +63,7 @@ public class BlockDistanceLimitedSearch {
      * @return true if the block is not air, false otherwise.
      */
     private boolean canReachBlock(BlockPos pos) {
-        Block block = player.getEntityWorld().getBlockState(pos).getBlock();
+        Block block = player.getWorld().getBlockState(pos).getBlock();
         // Consider the block reachable if it's not air.
         return !block.getDefaultState().isAir();
     }

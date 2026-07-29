@@ -221,7 +221,7 @@ public class HybridPlanner {
      */
     @SuppressWarnings("unused") // currentState reserved for future state-aware heuristics
     private SearchResult bidirectionalAStar(ActionNode startNode, ActionNode goalNode,
-                                           State currentState, float[] goalEmbedding) {
+                                            State currentState, float[] goalEmbedding) {
         // Forward search from start
         PriorityQueue<SearchNode> forwardQueue = new PriorityQueue<>(
             Comparator.comparingDouble(n -> n.fScore)

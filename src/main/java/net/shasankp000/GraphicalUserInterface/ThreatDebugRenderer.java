@@ -1,6 +1,5 @@
 package net.shasankp000.GraphicalUserInterface;
 
-import com.mojang.blaze3d.systems.RenderSystem;
 import net.minecraft.client.MinecraftClient;
 import net.minecraft.client.render.*;
 import net.minecraft.client.util.math.MatrixStack;
@@ -72,14 +71,10 @@ public class ThreatDebugRenderer {
 
         // Setup matrices
         MatrixStack matrices = new MatrixStack();
-        matrices.translate(-cameraPos.x, -cameraPos.y, -cameraPos.z);
+        matrices.translate((float)(-cameraPos.x), (float)(-cameraPos.y), (float)(-cameraPos.z));
 
-        RenderSystem.enableBlend();
-        RenderSystem.defaultBlendFunc();
-        RenderSystem.disableDepthTest();
-        RenderSystem.setShader(GameRenderer::getPositionColorProgram);
-
-        Tessellator tessellator = Tessellator.getInstance();
+        VertexConsumerProvider.Immediate consumers = MinecraftClient.getInstance().getBufferBuilders().getEntityVertexConsumers();
+        VertexConsumer buffer = consumers.getBuffer(RenderLayer.getLines());
 
         float r = ((boxColor >> 16) & 0xFF) / 255.0f;
         float g = ((boxColor >> 8) & 0xFF) / 255.0f;
@@ -87,20 +82,17 @@ public class ThreatDebugRenderer {
         float a = ((boxColor >> 24) & 0xFF) / 255.0f;
 
         // Draw bounding box edges
-        BufferBuilder buffer = tessellator.begin(VertexFormat.DrawMode.DEBUG_LINES, VertexFormats.POSITION_COLOR);
         drawBoxEdges(matrices.peek().getPositionMatrix(), buffer, box, r, g, b, a);
-        BufferRenderer.drawWithGlobalProgram(buffer.end());
+        consumers.draw(RenderLayer.getLines());
 
         // Restore state
-        RenderSystem.enableDepthTest();
-        RenderSystem.disableBlend();
 
     }
 
     /**
      * Draw the 12 edges of a bounding box (same as Minecraft hitbox display)
      */
-    private static void drawBoxEdges(Matrix4f matrix, BufferBuilder buffer, Box box, float r, float g, float b, float a) {
+    private static void drawBoxEdges(Matrix4f matrix, VertexConsumer buffer, Box box, float r, float g, float b, float a) {
         float minX = (float) box.minX;
         float minY = (float) box.minY;
         float minZ = (float) box.minZ;
@@ -109,44 +101,43 @@ public class ThreatDebugRenderer {
         float maxZ = (float) box.maxZ;
 
         // Bottom face edges
-        buffer.vertex(matrix, minX, minY, minZ).color(r, g, b, a);
-        buffer.vertex(matrix, maxX, minY, minZ).color(r, g, b, a);
+        buffer.vertex(matrix, minX, minY, minZ).color(r, g, b, a).normal(1.0f, 0.0f, 0.0f);
+        buffer.vertex(matrix, maxX, minY, minZ).color(r, g, b, a).normal(1.0f, 0.0f, 0.0f);
 
-        buffer.vertex(matrix, maxX, minY, minZ).color(r, g, b, a);
-        buffer.vertex(matrix, maxX, minY, maxZ).color(r, g, b, a);
+        buffer.vertex(matrix, maxX, minY, minZ).color(r, g, b, a).normal(0.0f, 0.0f, 1.0f);
+        buffer.vertex(matrix, maxX, minY, maxZ).color(r, g, b, a).normal(0.0f, 0.0f, 1.0f);
 
-        buffer.vertex(matrix, maxX, minY, maxZ).color(r, g, b, a);
-        buffer.vertex(matrix, minX, minY, maxZ).color(r, g, b, a);
+        buffer.vertex(matrix, maxX, minY, maxZ).color(r, g, b, a).normal(-1.0f, 0.0f, 0.0f);
+        buffer.vertex(matrix, minX, minY, maxZ).color(r, g, b, a).normal(-1.0f, 0.0f, 0.0f);
 
-        buffer.vertex(matrix, minX, minY, maxZ).color(r, g, b, a);
-        buffer.vertex(matrix, minX, minY, minZ).color(r, g, b, a);
+        buffer.vertex(matrix, minX, minY, maxZ).color(r, g, b, a).normal(0.0f, 0.0f, -1.0f);
+        buffer.vertex(matrix, minX, minY, minZ).color(r, g, b, a).normal(0.0f, 0.0f, -1.0f);
 
         // Top face edges
-        buffer.vertex(matrix, minX, maxY, minZ).color(r, g, b, a);
-        buffer.vertex(matrix, maxX, maxY, minZ).color(r, g, b, a);
+        buffer.vertex(matrix, minX, maxY, minZ).color(r, g, b, a).normal(1.0f, 0.0f, 0.0f);
+        buffer.vertex(matrix, maxX, maxY, minZ).color(r, g, b, a).normal(1.0f, 0.0f, 0.0f);
 
-        buffer.vertex(matrix, maxX, maxY, minZ).color(r, g, b, a);
-        buffer.vertex(matrix, maxX, maxY, maxZ).color(r, g, b, a);
+        buffer.vertex(matrix, maxX, maxY, minZ).color(r, g, b, a).normal(0.0f, 0.0f, 1.0f);
+        buffer.vertex(matrix, maxX, maxY, maxZ).color(r, g, b, a).normal(0.0f, 0.0f, 1.0f);
 
-        buffer.vertex(matrix, maxX, maxY, maxZ).color(r, g, b, a);
-        buffer.vertex(matrix, minX, maxY, maxZ).color(r, g, b, a);
+        buffer.vertex(matrix, maxX, maxY, maxZ).color(r, g, b, a).normal(-1.0f, 0.0f, 0.0f);
+        buffer.vertex(matrix, minX, maxY, maxZ).color(r, g, b, a).normal(-1.0f, 0.0f, 0.0f);
 
-        buffer.vertex(matrix, minX, maxY, maxZ).color(r, g, b, a);
-        buffer.vertex(matrix, minX, maxY, minZ).color(r, g, b, a);
+        buffer.vertex(matrix, minX, maxY, maxZ).color(r, g, b, a).normal(0.0f, 0.0f, -1.0f);
+        buffer.vertex(matrix, minX, maxY, minZ).color(r, g, b, a).normal(0.0f, 0.0f, -1.0f);
 
         // Vertical edges (connecting bottom to top)
-        buffer.vertex(matrix, minX, minY, minZ).color(r, g, b, a);
-        buffer.vertex(matrix, minX, maxY, minZ).color(r, g, b, a);
+        buffer.vertex(matrix, minX, minY, minZ).color(r, g, b, a).normal(0.0f, 1.0f, 0.0f);
+        buffer.vertex(matrix, minX, maxY, minZ).color(r, g, b, a).normal(0.0f, 1.0f, 0.0f);
 
-        buffer.vertex(matrix, maxX, minY, minZ).color(r, g, b, a);
-        buffer.vertex(matrix, maxX, maxY, minZ).color(r, g, b, a);
+        buffer.vertex(matrix, maxX, minY, minZ).color(r, g, b, a).normal(0.0f, 1.0f, 0.0f);
+        buffer.vertex(matrix, maxX, maxY, minZ).color(r, g, b, a).normal(0.0f, 1.0f, 0.0f);
 
-        buffer.vertex(matrix, maxX, minY, maxZ).color(r, g, b, a);
-        buffer.vertex(matrix, maxX, maxY, maxZ).color(r, g, b, a);
+        buffer.vertex(matrix, maxX, minY, maxZ).color(r, g, b, a).normal(0.0f, 1.0f, 0.0f);
+        buffer.vertex(matrix, maxX, maxY, maxZ).color(r, g, b, a).normal(0.0f, 1.0f, 0.0f);
 
-        buffer.vertex(matrix, minX, minY, maxZ).color(r, g, b, a);
-        buffer.vertex(matrix, minX, maxY, maxZ).color(r, g, b, a);
+        buffer.vertex(matrix, minX, minY, maxZ).color(r, g, b, a).normal(0.0f, 1.0f, 0.0f);
+        buffer.vertex(matrix, minX, maxY, maxZ).color(r, g, b, a).normal(0.0f, 1.0f, 0.0f);
     }
 
 }
-

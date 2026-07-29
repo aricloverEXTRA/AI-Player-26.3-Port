@@ -11,15 +11,16 @@ import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.entity.player.HungerManager;
 import net.minecraft.entity.player.PlayerEntity;
+import net.minecraft.entity.player.PlayerPosition;
 import net.minecraft.item.ItemStack;
 import net.minecraft.network.NetworkSide;
 import net.minecraft.network.packet.c2s.common.SyncedClientOptions;
 import net.minecraft.network.packet.c2s.play.ClientStatusC2SPacket;
 import net.minecraft.network.packet.s2c.play.EntityPositionS2CPacket;
 import net.minecraft.network.packet.s2c.play.EntitySetHeadYawS2CPacket;
+import net.minecraft.network.packet.s2c.play.PositionFlag;
 import net.minecraft.registry.RegistryKey;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.ServerTask;
 import net.minecraft.server.network.ConnectedClientData;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
@@ -32,8 +33,11 @@ import net.minecraft.world.GameMode;
 import net.minecraft.world.TeleportTarget;
 import net.minecraft.world.World;
 
+import java.io.IOException;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
+import java.net.URI;
+import java.net.URISyntaxException;
 import java.net.URL;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -129,21 +133,28 @@ public class createFakePlayer extends ServerPlayerEntity {
     private static void spawnFake(MinecraftServer server, ServerWorld worldIn, GameProfile gameprofile, Vec3d pos, double yaw, double pitch, GameMode gamemode, boolean flying, RegistryKey<World> dimensionId) {
         createFakePlayer instance = new createFakePlayer(server, worldIn, gameprofile, SyncedClientOptions.createDefault(), false);
         server.getPlayerManager().onPlayerConnect(new FakeClientConnection(NetworkSide.SERVERBOUND), instance, new ConnectedClientData(gameprofile, 0, instance.getClientOptions(), false));
-        instance.teleport(worldIn, pos.x, pos.y, pos.z, (float) yaw, (float) pitch);
+        Set<PositionFlag> flags = Set.of();
+        boolean dismount = false;
+        instance.teleport((ServerWorld) worldIn, pos.x, pos.y, pos.z, flags, (float) yaw, (float) pitch, dismount);
         instance.setHealth(20.0F);
         instance.unsetRemoved();
         instance.interactionManager.changeGameMode(gamemode);
         server.getPlayerManager().sendToDimension(new EntitySetHeadYawS2CPacket(instance, (byte) (instance.headYaw * 256 / 360)), dimensionId);
-        server.getPlayerManager().sendToDimension(new EntityPositionS2CPacket(instance), dimensionId);
+        PlayerPosition posRecord = new PlayerPosition(pos, Vec3d.ZERO, (float) yaw, (float) pitch);
+        EntityPositionS2CPacket posPacket = EntityPositionS2CPacket.create(instance.getId(), posRecord, Set.of(), instance.isOnGround());
+        server.getPlayerManager().sendToDimension(posPacket, dimensionId);
         instance.dataTracker.set(PLAYER_MODEL_PARTS, (byte) 0x7f);
         instance.getAbilities().flying = flying;
     }
 
-
     private static CompletableFuture<Optional<GameProfile>> fetchGameProfile(final String name) {
         return CompletableFuture.supplyAsync(() -> {
             try {
-                URL url = new URL("https://api.mojang.com/users/profiles/minecraft/" + name);
+                URI uri = new URI("https://api.mojang.com/users/profiles/minecraft/" + name);
+                if (!uri.isAbsolute()) {
+                    throw new IllegalArgumentException("Invalid URI: " + name);
+                }
+                URL url = uri.toURL();
                 HttpURLConnection connection = (HttpURLConnection) url.openConnection();
                 connection.setRequestMethod("GET");
 
@@ -154,7 +165,9 @@ public class createFakePlayer extends ServerPlayerEntity {
                         return Optional.ofNullable(profile);
                     }
                 }
-            } catch (Exception e) {
+            } catch (URISyntaxException e) {
+                throw new IllegalArgumentException("Invalid URI: " + name, e);
+            } catch (IOException e) {
                 LOGGER.error("Player {} was not found on mojang's servers. {}", name, e.getMessage());
                 throw new RuntimeException(e);
             }
@@ -173,7 +186,6 @@ public class createFakePlayer extends ServerPlayerEntity {
         if (!isUsingItem()) super.onEquipStack(slot, previous, stack);
     }
 
-    @Override
     public void kill()
     {
         kill(Messenger.s("Killed"));
@@ -186,7 +198,7 @@ public class createFakePlayer extends ServerPlayerEntity {
         if (reason.getContent() instanceof TranslatableTextContent text && text.getKey().equals("multiplayer.disconnect.duplicate_login")) {
             this.networkHandler.disconnect(reason);
         } else {
-            this.server.send(new ServerTask(this.server.getTicks(), () -> {
+            this.getServer().send(new net.minecraft.server.ServerTask(this.getServer().getTicks(), () -> {
                 this.networkHandler.disconnect(reason);
             }));
         }
@@ -198,7 +210,7 @@ public class createFakePlayer extends ServerPlayerEntity {
         if (Objects.requireNonNull(this.getServer()).getTicks() % 10 == 0)
         {
             this.networkHandler.syncWithPlayerPosition();
-            this.getServerWorld().getChunkManager().updatePosition(this);
+            this.getWorld().getChunkManager().updatePosition(this);
         }
         try
         {
@@ -250,7 +262,7 @@ public class createFakePlayer extends ServerPlayerEntity {
     }
 
     @Override
-    public Entity teleportTo(TeleportTarget target)
+    public ServerPlayerEntity teleportTo(TeleportTarget target)
     {
         Entity entity = super.teleportTo(target);
         if (notInAnyWorld) {

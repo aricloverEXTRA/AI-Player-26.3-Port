@@ -2,6 +2,7 @@ package net.shasankp000.PlayerUtils;
 
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.entity.EquipmentSlot;
 import net.minecraft.item.ItemStack;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -211,7 +212,8 @@ public class PlayerRetaliationTracker {
 
         // Armor threat (well-armored player is more dangerous)
         double armorThreat = 0.0;
-        for (ItemStack armorPiece : player.getArmorItems()) {
+        for (EquipmentSlot slot : new EquipmentSlot[]{EquipmentSlot.HEAD, EquipmentSlot.CHEST, EquipmentSlot.LEGS, EquipmentSlot.FEET}) {
+            ItemStack armorPiece = player.getEquippedStack(slot);
             if (!armorPiece.isEmpty()) {
                 String armorId = net.minecraft.registry.Registries.ITEM.getId(armorPiece.getItem()).toString();
                 if (armorId.contains("diamond") || armorId.contains("netherite")) {

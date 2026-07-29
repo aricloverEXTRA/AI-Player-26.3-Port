@@ -406,7 +406,7 @@ public class ProjectileDefenseUtils {
 
             // Now equip from hotbar to main hand
             LOGGER.info("Selecting hotbar slot {} (shield)", targetHotbarSlot);
-            bot.getInventory().selectedSlot = targetHotbarSlot;
+            bot.getInventory().setSelectedSlot(targetHotbarSlot);
 
             // Verify shield is in main hand
             ItemStack mainHand = bot.getMainHandStack();
@@ -421,7 +421,7 @@ public class ProjectileDefenseUtils {
             // Swap main hand (shield) to offhand
             LOGGER.info("Swapping shield from main hand to offhand...");
             ItemStack offHand = bot.getOffHandStack();
-            bot.getInventory().offHand.set(0, mainHand); // Shield goes to offhand
+            bot.getInventory().setStack(net.minecraft.entity.player.PlayerInventory.MAIN_SIZE + 4, mainHand); // Shield goes to offhand
             bot.getInventory().setStack(targetHotbarSlot, offHand); // Previous offhand item goes to hotbar
 
 

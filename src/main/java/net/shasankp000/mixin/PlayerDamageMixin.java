@@ -4,6 +4,7 @@ import net.minecraft.entity.Entity;
 import net.minecraft.entity.damage.DamageSource;
 import net.minecraft.entity.player.PlayerEntity;
 import net.minecraft.server.network.ServerPlayerEntity;
+import net.minecraft.server.world.ServerWorld;
 import net.shasankp000.PlayerUtils.PlayerRetaliationTracker;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.injection.At;
@@ -18,7 +19,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 public class PlayerDamageMixin {
 
     @Inject(method = "damage", at = @At("HEAD"))
-    private void onPlayerDamaged(DamageSource source, float amount, CallbackInfoReturnable<Boolean> cir) {
+    private void onPlayerDamaged(ServerWorld world, DamageSource source, float amount, CallbackInfoReturnable<Boolean> cir) {
         ServerPlayerEntity bot = (ServerPlayerEntity) (Object) this;
 
         // Check if damage source is another player
@@ -34,4 +35,3 @@ public class PlayerDamageMixin {
         }
     }
 }
-

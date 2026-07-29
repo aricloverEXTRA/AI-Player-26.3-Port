@@ -3,6 +3,7 @@ package net.shasankp000.ChatUtils.Helper;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonSyntaxException;
 import com.google.gson.stream.JsonReader;
+import com.google.gson.Strictness;
 
 import java.io.StringReader;
 import java.util.regex.Matcher;
@@ -65,7 +66,7 @@ public class JsonUtils {
     private static boolean isValidJson(String jsonString) {
         try {
             JsonReader reader = new JsonReader(new StringReader(jsonString));
-            reader.setLenient(true);
+            reader.setStrictness(Strictness.LENIENT);
             JsonParser.parseReader(reader).getAsJsonObject();
             return true;
         } catch (JsonSyntaxException | IllegalStateException e) {

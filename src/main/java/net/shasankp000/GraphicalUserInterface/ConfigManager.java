@@ -93,10 +93,10 @@ public class ConfigManager extends Screen {
 
     @Override
     public void render(DrawContext context, int mouseX, int mouseY, float delta) {
-        this.renderBackground(context, mouseX, mouseY, delta);
+        super.render(context, mouseX, mouseY, delta);
 
         int centerX = this.width / 2;
-        String title = "AI-Player Mod Configuration Menu v1.0.5.4-release+1.21.1";
+        String title = "AI-Player Mod Configuration Menu v1.0.5.4-release+1.21.8";
         context.drawText(this.textRenderer, title, centerX - (this.textRenderer.getWidth(title) / 2), 20, 0xFFFFFFFF, true);
 
         context.drawText(this.textRenderer, "Search Models:", centerX - 150, searchField.getY() - 15, 0xFFFFD700, true);
@@ -112,8 +112,6 @@ public class ConfigManager extends Screen {
 
         String helpText = "Search to filter models • Select a model and click Save";
         context.drawText(this.textRenderer, helpText, centerX - (this.textRenderer.getWidth(helpText) / 2), this.height - 65, 0xFFFFB6C1, true);
-
-        super.render(context, mouseX, mouseY, delta);
     }
 
     private void onSearchChanged(String searchText) {

@@ -12,6 +12,7 @@ import net.minecraft.server.command.ServerCommandSource;
 import net.minecraft.server.network.ServerPlayNetworkHandler;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.text.Text;
+import net.minecraft.util.PlayerInput;
 
 import net.minecraft.util.math.*;
 import org.slf4j.Logger;
@@ -171,12 +172,7 @@ public class InputPacketHandler {
             // Get the bot's network handler (which implements ServerPlayPacketListener)
             ServerPlayNetworkHandler networkHandler = bot.networkHandler;
 
-            // Create a packet to simulate pressing the sneak key
-            ClientCommandC2SPacket packet = new ClientCommandC2SPacket(bot, ClientCommandC2SPacket.Mode.PRESS_SHIFT_KEY);
-
-            // Send the packet to the server
-            networkHandler.onClientCommand(packet);
-
+            bot.setSneaking(true);
             context.getSource().sendMessage(Text.of("Sneak action performed for bot: " + bot.getName().getString()));
         } catch (Exception e) {
             LOGGER.error("Caught exception while sending sneak packet: {}", e.getMessage());
@@ -208,12 +204,7 @@ public class InputPacketHandler {
             // Get the bot's network handler (which implements ServerPlayPacketListener)
             ServerPlayNetworkHandler networkHandler = bot.networkHandler;
 
-            // Create a packet to simulate releasing the sneak key
-            ClientCommandC2SPacket packet = new ClientCommandC2SPacket(bot, ClientCommandC2SPacket.Mode.RELEASE_SHIFT_KEY);
-
-            // Send the packet to the server
-            networkHandler.onClientCommand(packet);
-
+            bot.setSneaking(false);
             context.getSource().sendMessage(Text.of("Sneak action performed for bot: " + bot.getName().getString()));
         } catch (Exception e) {
             LOGGER.error("Caught exception while sending unSneak packet: {}", e.getMessage());
@@ -246,7 +237,8 @@ public class InputPacketHandler {
         lastPosition = bot.getPos();
 
         ServerPlayNetworkHandler networkHandler = bot.networkHandler;
-        PlayerInputC2SPacket packet = new PlayerInputC2SPacket(0.0f, 1.0f, false, false); // W key packet.
+		PlayerInput forwardInput = new PlayerInput(true, false, false, false, false, false, false);
+		PlayerInputC2SPacket packet = new PlayerInputC2SPacket(forwardInput); // W key packet.
         networkHandler.onPlayerInput(packet);
 
 
@@ -257,7 +249,7 @@ public class InputPacketHandler {
             ticksRemaining = 20; // Number of ticks to hold the key
 
             Direction direction = bot.getHorizontalFacing();
-            System.out.println(direction.getAxis().getName());
+            System.out.println(direction.getAxis().getId());
 
             if(direction.getAxis().equals(Direction.Axis.X)) {
 
@@ -340,7 +332,8 @@ public class InputPacketHandler {
         lastPosition = bot.getPos();
 
         ServerPlayNetworkHandler networkHandler = bot.networkHandler;
-        PlayerInputC2SPacket packet = new PlayerInputC2SPacket(0.0f, -1.0f, false, false); // S key packet.
+        PlayerInput backwardInput = new PlayerInput(false, true, false, false, false, false, false);
+		PlayerInputC2SPacket packet = new PlayerInputC2SPacket(backwardInput); // S key packet.
         networkHandler.onPlayerInput(packet);
 
         System.out.println("Recorded current bot position as last pos: " + lastPosition);
@@ -349,7 +342,7 @@ public class InputPacketHandler {
             ticksRemaining = 20; // Number of ticks to hold the key
 
             Direction direction = bot.getHorizontalFacing();
-            System.out.println(direction.getAxis().getName());
+            System.out.println(direction.getAxis().getId());
 
             if(direction.getAxis().equals(Direction.Axis.X)) {
 
@@ -434,7 +427,8 @@ public class InputPacketHandler {
         lastPosition = bot.getPos();
 
         ServerPlayNetworkHandler networkHandler = bot.networkHandler;
-        PlayerInputC2SPacket packet = new PlayerInputC2SPacket(-1.0f, 0.0f, false, false); // A key packet.
+		PlayerInput leftInput = new PlayerInput(false, false, true, false, false, false, false);
+		PlayerInputC2SPacket packet = new PlayerInputC2SPacket(leftInput); // A key packet.
         networkHandler.onPlayerInput(packet);
 
         System.out.println("Recorded current bot position as last pos: " + lastPosition);
@@ -444,7 +438,7 @@ public class InputPacketHandler {
             ticksRemaining = 20; // Number of ticks to hold the key
 
             Direction direction = bot.getHorizontalFacing();
-            System.out.println(direction.getAxis().getName());
+            System.out.println(direction.getAxis().getId());
 
             final ServerPlayerEntity[] finalBot = {bot};
 
@@ -520,7 +514,8 @@ public class InputPacketHandler {
         lastPosition = bot.getPos();
 
         ServerPlayNetworkHandler networkHandler = bot.networkHandler;
-        PlayerInputC2SPacket packet = new PlayerInputC2SPacket(1.0f, 0.0f, false, false); // D key packet.
+		PlayerInput rightInput = new PlayerInput(false, false, false, true, false, false, false);
+		PlayerInputC2SPacket packet = new PlayerInputC2SPacket(rightInput); // D key packet.
         networkHandler.onPlayerInput(packet);
 
         System.out.println("Recorded current bot position as last pos: " + lastPosition);
@@ -530,7 +525,7 @@ public class InputPacketHandler {
 
 
             Direction direction = bot.getHorizontalFacing();
-            System.out.println(direction.getAxis().getName());
+            System.out.println(direction.getAxis().getId());
 
             final ServerPlayerEntity[] finalBot = {bot};
 
