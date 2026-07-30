@@ -8,6 +8,10 @@ import net.shasankp000.GameAI.BotEventHandler;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.Map;
+import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+
 /**
  * Routes bot item-pickup events to {@link ItemHandoffHandler}.
  *
@@ -22,6 +26,21 @@ import org.slf4j.LoggerFactory;
 public final class ItemHandoffListener {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("item-handoff-listener");
+
+    /**
+     * playerTouch can run for the same ItemEntity on several consecutive ticks
+     * before vanilla pickup removes it. Remember handled entities so one gift
+     * produces one reaction and one mood update.
+     */
+    private static final Map<UUID, Long> HANDLED_ITEMS = new ConcurrentHashMap<>();
+
+    /**
+     * Several item entities may belong to one gift (for example, blocks thrown
+     * in quick succession). Collapse those into a single acknowledgement.
+     */
+    private static final Map<UUID, Long> LAST_ACKNOWLEDGEMENT = new ConcurrentHashMap<>();
+    private static final long ACKNOWLEDGEMENT_COOLDOWN_MS = 3_000L;
+    private static final long HANDLED_ITEM_RETENTION_MS = 60_000L;
 
     private ItemHandoffListener() {}
 
@@ -67,11 +86,37 @@ public final class ItemHandoffListener {
             thrower = ownerPlayer;
         }
 
+        // Ignore repeated collision callbacks for the same dropped item.
+        long now = System.currentTimeMillis();
+        if (HANDLED_ITEMS.putIfAbsent(itemEntity.getUUID(), now) != null) {
+            return;
+        }
+
+        // A burst of separately thrown items is still one handoff from the
+        // player's perspective, so acknowledge the burst only once.
+        boolean sendAcknowledgement = true;
+        if (thrower != null) {
+            Long previousAcknowledgement = LAST_ACKNOWLEDGEMENT.put(thrower.getUUID(), now);
+            if (previousAcknowledgement != null
+                    && now - previousAcknowledgement < ACKNOWLEDGEMENT_COOLDOWN_MS) {
+                sendAcknowledgement = false;
+                LOGGER.debug("[handoff-listener] Suppressed duplicate acknowledgement for '{}'",
+                        thrower.getName().getString());
+            }
+        }
+
         LOGGER.debug("[handoff-listener] bot '{}' picked up '{}' (thrower={})",
                 serverPlayer.getName().getString(),
                 stack.getHoverName().getString(),
                 thrower != null ? thrower.getName().getString() : "none");
 
-        ItemHandoffHandler.onBotPickedUpItem(serverPlayer, thrower, stack);
+        ItemHandoffHandler.onBotPickedUpItem(
+                serverPlayer, thrower, stack, sendAcknowledgement);
+        cleanupHandledItems(now);
+    }
+
+    private static void cleanupHandledItems(long now) {
+        HANDLED_ITEMS.entrySet().removeIf(
+                entry -> now - entry.getValue() > HANDLED_ITEM_RETENTION_MS);
     }
 }
