@@ -122,6 +122,18 @@ public final class ItemHandoffHandler {
             ServerPlayer bot,
             ServerPlayer thrower,
             ItemStack stack) {
+        onBotPickedUpItem(bot, thrower, stack, true);
+    }
+
+    /**
+     * Handles a pickup while optionally suppressing its chat reaction. This is
+     * used when several item entities are part of the same gift burst.
+     */
+    static void onBotPickedUpItem(
+            ServerPlayer bot,
+            ServerPlayer thrower,
+            ItemStack stack,
+            boolean sendReaction) {
 
         if (bot == null || stack == null || stack.isEmpty()) return;
 
@@ -155,7 +167,7 @@ public final class ItemHandoffHandler {
                 botName, itemName, rawTier, effectiveTier, throwerName, delta[0], delta[1]);
 
         // 2. Send chat reaction (only when thrown by a real player)
-        if (thrower != null) {
+        if (thrower != null && sendReaction) {
             String reaction = pickReaction(effectiveTier, neededJunk, throwerName, itemName);
             if (bot.createCommandSourceStack().getServer() != null) {
                 bot.createCommandSourceStack().getServer().execute(() -> {
