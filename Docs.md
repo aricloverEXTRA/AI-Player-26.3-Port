@@ -18,7 +18,7 @@ Version bump in gradle.properties:minecraft_version=26.2
 loader_version=0.19.3
 loom_version=1.17-SNAPSHOT
 fabric_version=0.155.2+26.2
-mod_version=1.0.5.4-release+26.2
+mod_version=1.0.6-release+26.2
 
 Build system updated in build.gradle:Loom plugin id changed to net.fabricmc.fabric-loom
 Shadow plugin changed to com.gradleup.shadow
