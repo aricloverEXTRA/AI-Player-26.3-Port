@@ -62,7 +62,8 @@ I had to add that statement up there to prevent misunderstandings.
 
 This mod relies on the internal code of the Carpet mod, please star the repository of the mod: https://github.com/gnembon/fabric-carpet (Giving credit where it's due)
 
-This mod also relies on the ollama4j project. https://github.com/amithkoujalgi/ollama4j
+Ollama is **not required** to run AI Player. The mod can connect directly to hosted or local
+OpenAI-compatible API endpoints.
 
 ---
 # Download links
@@ -120,7 +121,7 @@ Set the system property(JVM argument) when launching the game:
     - **Custom API Key**: Your API key for the provider
 3. Hit save. In case you don't see the list of models immediately hit the "Refresh Models" button once or twice.
 4. If you still don't see the list of models, close the config manager, type `/configMan` again and you should see the list of models available.
-5. ollama is still required to be open in the background because of the embedding model being used, but I will separate this entirely in the next mini patch, by adding an embedding api endpoint from the providers, and also upgrading to the `embedddinggemma` model from `nomic-embed-text`
+5. Ollama is not required. AI Player connects directly to the configured provider endpoint.
 
 ### 3. Select a Model
 
@@ -135,6 +136,56 @@ Any provider that implements the OpenAI API standard should work. Some examples:
 - **Perplexity**: `https://api.perplexity.ai/`
 - **Groq**: `https://api.groq.com/openai/v1`
 - **Local LM Studio**: `http://localhost:1234/v1`
+
+## Using a Local Llama Model
+
+You can run a Llama model locally with any server that exposes an OpenAI-compatible API.
+Ollama is not needed. The server must provide:
+
+- `GET /v1/models`
+- `POST /v1/chat/completions`
+
+### Option A: LM Studio
+
+1. Install [LM Studio](https://lmstudio.ai/) and download an instruction-tuned Llama model.
+2. Load the model, open the **Developer** tab, and start the local server.
+3. Use `http://localhost:1234/v1` as the **Custom API URL**.
+4. Leave **Custom API Key** empty unless you enabled authentication in LM Studio.
+
+### Option B: llama.cpp
+
+Download or build [llama.cpp](https://github.com/ggml-org/llama.cpp), then start its
+OpenAI-compatible server with a GGUF model:
+
+```bash
+llama-server -m /path/to/your-model.gguf --host 127.0.0.1 --port 8080
+```
+
+Use `http://localhost:8080/v1` as the **Custom API URL** and leave the API key empty.
+
+### Connect AI Player
+
+1. Add `-Daiplayer.llmMode=custom` to your Minecraft launcher's JVM arguments.
+2. Start the local model server before launching Minecraft and keep it running while you play.
+3. In Minecraft, run `/configMan`, open **API Keys**, and enter the local server URL in
+   **Custom API URL**.
+4. Enter an API key only if your local server requires one, then save.
+5. Refresh the model list, select the loaded Llama model, and save the configuration.
+6. Spawn the bot in play mode:
+
+   ```text
+   /bot spawn <yourBotName> play
+   ```
+
+If no models appear, verify the URL with:
+
+```bash
+curl http://localhost:1234/v1/models
+```
+
+Replace port `1234` with your server's port. If Minecraft runs in a container or on another
+computer, `localhost` refers to that environment; use the model server's reachable LAN address
+instead.
 
 ## API Compatibility
 
@@ -365,42 +416,33 @@ And type `./graldew build`
 
 ---
 
-**Below instructions are same irrespective of build from intellij or direct mod download.**
+**The instructions below are the same whether you build from IntelliJ or download the mod jar.**
 
-Step 6. Setup ollama.
+Step 6. Choose an LLM provider. AI Player does not require Ollama. You can use a hosted provider
+or a local Llama server with an OpenAI-compatible endpoint. See
+[Using a Local Llama Model](#using-a-local-llama-model) for local setup instructions.
 
-Go to https://ollama.com/
+Step 7. Add the provider mode to your Minecraft launcher's JVM arguments. For an
+OpenAI-compatible endpoint, use:
 
-![image](https://github.com/user-attachments/assets/c28798e4-c7bf-4faf-88e5-76315f88f0d1)
-
-Download based on your operating system.
-
-After installation, run ollama from your desktop. This will launch the ollama server. 
-
-This can be accessed in your system tray
-
-![image](https://github.com/user-attachments/assets/3ed6468e-0e8c-4723-ac80-1ab77a7208d4)
-
-
-Now open a command line client, on windows, search CMD or terminal and then open it.
-
-```
-1. In cmd or terminal type `ollama pull nomic-embed-text (if not already done).
-2. Type `ollama pull llama3.2`
-3. Type `ollama rm gemma2 (if you still have it installed) (for previous users only)
-4. Type `ollama rm llama2 (if you still have it installed) (for previous users only)
-5. If you have run the mod before go to your .minecraft folder, navigate to a folder called config, and delete a file called settings.json5 (for previous users only)
+```text
+-Daiplayer.llmMode=custom
 ```
 
-Then **make sure you have turned on ollama server**. 
+Step 8. Launch the game.
 
-Step 7: Download the dependencies
+Step 9. Type `/configMan` in chat, open **API Keys**, configure the custom API URL and optional
+API key, then refresh and select a model. Save the configuration before exiting.
 
-Step 8: Launch the game.
+Step 10. Spawn the bot with one of these modes:
 
-Step 9: Type `/configMan` in chat and select llama3.2 as the language model, then hit save and exit.
+```text
+/bot spawn <yourBotName> training
+/bot spawn <yourBotName> play
+```
 
-Step 10: Then type `/bot spawn <yourBotName> <training (for training mode, this mode won't connect to language model) and play (for normal usage)`
+Training mode does not connect to a language model. Play mode uses the provider and model
+selected in the configuration manager.
 
 ---
 # Mod usage
@@ -456,5 +498,4 @@ Sub commands:
 The above command changes credits go to [Mr. Álvaro Carvalho](https://github.com/A11v1r15)
 
 And yes since this mod relies on carpet mod, you can spawn a bot using carpet mod's commands too and try the mod. But if you happen to be playing in offline mode, then I recommend using the mod's in built spawn command.
-
 
