@@ -185,14 +185,24 @@ public class AutonomousGoalEngine {
     }
 
     /**
-     * Queue one deterministic nearby-bed sleep attempt when the bot is idle.
+     * Queue one deterministic nearby-bed sleep attempt when no action is actively
+     * executing. At night, queued LLM-plan work yields to sleeping; player and
+     * companion goals are preserved and continue to take precedence.
      * Eligibility is checked here and again when the queued goal executes.
      */
     void requestNearbyBedSleep() {
-        if (stopped.get() || playerControlled.get() || goalExecuting.get() || !goalQueue.isEmpty()) return;
+        if (stopped.get() || playerControlled.get() || goalExecuting.get()) return;
         if (!sleepGoalPending.compareAndSet(false, true)) return;
 
         if (!sleepController.shouldQueueAttempt()) {
+            sleepGoalPending.set(false);
+            return;
+        }
+
+        // Sleeping through the night is more important than a speculative LLM
+        // plan, but never discard a direct player or companion instruction.
+        goalQueue.removeIf(entry -> entry.source() == GoalQueueEntry.Source.LLM_PLAN);
+        if (!goalQueue.isEmpty()) {
             sleepGoalPending.set(false);
             return;
         }
