@@ -1041,6 +1041,19 @@ public class RLAgent {
                     risk += evasionRisk;
                     break;
 
+                case SLEEP:
+                    // Sleeping is a low-risk option only at night when no hostile
+                    // entities are nearby. Execution performs the final bed and
+                    // safety validation against the live world.
+                    if (!"night".equals(currentState.getTimeOfDay())) {
+                        risk += 20.0;
+                    } else if (!hostileEntities.isEmpty()) {
+                        risk += 25.0;
+                    } else {
+                        risk -= 5.0;
+                    }
+                    break;
+
                 case HOTBAR_1, HOTBAR_2, HOTBAR_3, HOTBAR_4, HOTBAR_5, HOTBAR_6, HOTBAR_7, HOTBAR_8, HOTBAR_9:
                     int hotbarIndex = action.ordinal() - Action.HOTBAR_1.ordinal();
                     System.out.println("hotbar index: " + hotbarIndex);
@@ -1510,6 +1523,12 @@ public class RLAgent {
                 break;
             case USE_ITEM:
                 if (currentState.getBotHealth() < 10 || currentState.getBotHungerLevel() < 8) weight += 3; // Prioritize consumables
+                break;
+            case SLEEP:
+                if ("night".equals(currentState.getTimeOfDay())
+                        && currentState.getNearbyEntities().stream().noneMatch(EntityDetails::isHostile)) {
+                    weight += 4;
+                }
                 break;
             // Other cases can be added based on relevance
         }

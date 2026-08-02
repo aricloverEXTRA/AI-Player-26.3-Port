@@ -133,6 +133,7 @@ public class AutoFaceEntity {
             catch (Exception e) {
 
                 System.err.println("No existing epsilon found. Starting fresh.");
+                rlAgent = new RLAgent(1.0, qTable);
 
             }
 
@@ -534,6 +535,13 @@ public class AutoFaceEntity {
                     // Clear hostile entity flags
                     botBusy = false;
                     hostileEntityInFront = false;
+
+                    // Safe nighttime has no combat trigger, so explicitly let the
+                    // learned policy evaluate its SLEEP action while the bot is idle.
+                    if (!((PathTracer.BotSegmentManager.getBotMovementStatus() || isBotMoving)
+                            || blockDetectionUnit.getBlockDetectionStatus() || isBotExecutingTask())) {
+                        BotEventHandler.considerNightSleep(finalRlAgent, qTable, bot);
+                    }
 
                     // Face nearby entities (players, passive mobs, etc.) - but only if bot is NOT busy with tasks
                     if (!((PathTracer.BotSegmentManager.getBotMovementStatus() || isBotMoving) || blockDetectionUnit.getBlockDetectionStatus() || isBotExecutingTask())) {

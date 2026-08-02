@@ -61,9 +61,6 @@ public class AutonomousGoalEngine {
     /** True once shutdown() has been called. */
     private final AtomicBoolean stopped = new AtomicBoolean(false);
 
-    /** Prevents the scheduler from stacking duplicate sleep requests. */
-    private final AtomicBoolean sleepGoalPending = new AtomicBoolean(false);
-
     /** True while the serial worker is executing a dequeued goal. */
     private final AtomicBoolean goalExecuting = new AtomicBoolean(false);
 
@@ -106,7 +103,6 @@ public class AutonomousGoalEngine {
     public void shutdown() {
         stopped.set(true);
         goalQueue.clear();
-        sleepGoalPending.set(false);
         sleepController.shutdown();
         executor.shutdownNow();
         LOGGER.info("[autonomous] Shut down for bot '{}'", botName);
@@ -157,9 +153,6 @@ public class AutonomousGoalEngine {
      */
     public void setPlayerControlled(boolean controlled) {
         playerControlled.set(controlled);
-        if (controlled && goalQueue.removeIf(entry -> entry.source() == GoalQueueEntry.Source.SURVIVAL)) {
-            sleepGoalPending.set(false);
-        }
         if (!controlled) {
             LOGGER.debug("[autonomous] Resuming autonomous mode for bot '{}'", botName);
         }
@@ -185,42 +178,11 @@ public class AutonomousGoalEngine {
     }
 
     /**
-     * Queue one deterministic nearby-bed sleep attempt when no action is actively
-     * executing. At night, queued LLM-plan work yields to sleeping; player and
-     * companion goals are preserved and continue to take precedence.
-     * Eligibility is checked here and again when the queued goal executes.
-     */
-    void requestNearbyBedSleep() {
-        if (stopped.get() || playerControlled.get() || goalExecuting.get()) return;
-        if (!sleepGoalPending.compareAndSet(false, true)) return;
-
-        if (!sleepController.shouldQueueAttempt()) {
-            sleepGoalPending.set(false);
-            return;
-        }
-
-        // Sleeping through the night is more important than a speculative LLM
-        // plan, but never discard a direct player or companion instruction.
-        goalQueue.removeIf(entry -> entry.source() == GoalQueueEntry.Source.LLM_PLAN);
-        if (!goalQueue.isEmpty()) {
-            sleepGoalPending.set(false);
-            return;
-        }
-
-        boolean accepted = enqueue(new GoalQueueEntry(
-                "sleep in a nearby bed",
-                30,
-                GoalQueueEntry.Source.SURVIVAL));
-        if (!accepted) sleepGoalPending.set(false);
-    }
-
-    /**
      * Trigger a fresh LLM re-plan and replace the current queue.
      * Called by {@link AutonomousScheduler} on its idle re-plan tick.
      */
     public void triggerReplan() {
         goalQueue.clear();
-        sleepGoalPending.set(false);
         generateAndEnqueueGoals();
     }
 
@@ -327,15 +289,6 @@ public class AutonomousGoalEngine {
                 entry.goalText(), entry.priority(), entry.source());
 
         String llmProvider = System.getProperty("aiplayer.llmMode", "custom");
-
-        if (entry.source() == GoalQueueEntry.Source.SURVIVAL) {
-            try {
-                sleepController.attemptSleep();
-            } finally {
-                sleepGoalPending.set(false);
-            }
-            return;
-        }
 
         // For WORLD_EVENT goals that are purely conversational, route through
         // LLMServiceHandler so the bot produces a natural chat response.

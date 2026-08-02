@@ -32,6 +32,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BooleanSupplier;
 
@@ -39,7 +40,7 @@ import java.util.function.BooleanSupplier;
  * Per-bot deterministic survival controller for finding, placing, and using beds.
  * Minecraft world and inventory access is marshalled onto the server thread.
  */
-final class NearbyBedSleepController {
+public final class NearbyBedSleepController {
 
     private static final Logger LOGGER = LoggerFactory.getLogger("nearby-bed-sleep");
     private static final int SEARCH_RADIUS = 24;
@@ -47,6 +48,8 @@ final class NearbyBedSleepController {
     private static final int PLACEMENT_RADIUS = 4;
     private static final long RETRY_COOLDOWN_TICKS = 20L * 30L;
     private static final long SERVER_CALL_TIMEOUT_SECONDS = 15L;
+    private static final ConcurrentHashMap<java.util.UUID, NearbyBedSleepController> RL_CONTROLLERS =
+            new ConcurrentHashMap<>();
 
     private final String botName;
     private final BooleanSupplier playerControlled;
@@ -88,9 +91,25 @@ final class NearbyBedSleepController {
         }, false));
     }
 
-    void attemptSleep() {
+    /** Execute one RL-selected sleep attempt for the supplied bot. */
+    public static boolean attemptFromRl(ServerPlayer bot) {
+        if (bot == null) return false;
+        AutonomousGoalEngine engine = AutonomousManager.getInstance()
+                .getEngine(bot.getName().getString());
+        if (engine != null && engine.isPlayerControlled()) return false;
+        NearbyBedSleepController controller = RL_CONTROLLERS.computeIfAbsent(
+                bot.getUUID(), ignored -> new NearbyBedSleepController(bot.getName().getString(),
+                        () -> {
+                            AutonomousGoalEngine activeEngine = AutonomousManager.getInstance()
+                                    .getEngine(bot.getName().getString());
+                            return activeEngine != null && activeEngine.isPlayerControlled();
+                        }));
+        return controller.attemptSleep();
+    }
+
+    boolean attemptSleep() {
         BedTarget target = callOnServer(this::prepareTarget, null);
-        if (target == null || Thread.currentThread().isInterrupted()) return;
+        if (target == null || Thread.currentThread().isInterrupted()) return false;
 
         NavigationContext navigation = callOnServer(() -> {
             ServerPlayer bot = resolveBot();
@@ -101,7 +120,7 @@ final class NearbyBedSleepController {
             return new NavigationContext(source,
                     bot.blockPosition().distManhattan(target.standPos()) <= 1);
         }, null);
-        if (navigation == null) return;
+        if (navigation == null) return false;
 
         if (!navigation.alreadyThere()) {
             String navigationResult = GoTo.goTo(navigation.source(),
@@ -116,6 +135,7 @@ final class NearbyBedSleepController {
         } else if (result == SleepResult.FAILED && !stopped) {
             markFailed(target.headPos());
         }
+        return result == SleepResult.SUCCESS;
     }
 
     synchronized void shutdown() {

@@ -5,7 +5,7 @@ package net.shasankp000.GameAI.autonomous;
  *
  * @param goalText   Natural-language goal string fed into GoalMapper.
  * @param priority   Higher value = processed first. Normal LLM goals = 0,
- *                   world-event injections = 10, survival behavior = 30.
+ *                   world-event injections = 10.
  * @param source     Where this goal came from (for logging / debug).
  */
 public record GoalQueueEntry(String goalText, int priority, Source source)
@@ -16,8 +16,6 @@ public record GoalQueueEntry(String goalText, int priority, Source source)
         LLM_PLAN,
         /** Injected by WorldEventListener in response to a server event. */
         WORLD_EVENT,
-        /** Deterministic survival behavior, such as sleeping through the night. */
-        SURVIVAL,
         /** Directly requested by a human player via chat. */
         PLAYER
     }

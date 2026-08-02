@@ -26,6 +26,7 @@ import net.shasankp000.Entity.EntityDetails;
 import net.shasankp000.WorldUitls.isBlockItem;
 import net.shasankp000.GameAI.mood.MoodEngine;
 import net.shasankp000.GameAI.persona.PersonaRegistry;
+import net.shasankp000.GameAI.autonomous.NearbyBedSleepController;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -74,6 +75,9 @@ public class BotEventHandler {
     private static State previousState = null;
     private static StateActions.Action previousAction = null;
     private static double previousReward = 0.0;
+    private static volatile boolean lastSleepActionSucceeded = false;
+    private static final Map<UUID, Long> lastNightSleepDecision = new HashMap<>();
+    private static final long NIGHT_SLEEP_DECISION_INTERVAL_MS = TimeUnit.SECONDS.toMillis(15);
 
     // Singleton RLAgent – lazily created and cached for external callers
     private static RLAgent cachedRLAgent = null;
@@ -133,6 +137,65 @@ public class BotEventHandler {
             cachedRLAgent = new RLAgent(savedEpsilon, null);
         }
         return cachedRLAgent;
+    }
+
+    /**
+     * Gives the learned policy an opportunity to select {@link StateActions.Action#SLEEP}
+     * during a safe night.  This deliberately does not invoke sleeping directly: the
+     * action must first be selected by the RL policy and its result is then learned.
+     */
+    public static void considerNightSleep(RLAgent rlAgentHook, QTable qTable, ServerPlayer candidateBot) {
+        if (rlAgentHook == null || qTable == null || candidateBot == null
+                || !candidateBot.isAlive() || candidateBot.isSleeping()
+                || GetTime.getTimeOfWorld(candidateBot) < 12000) {
+            return;
+        }
+
+        long now = System.currentTimeMillis();
+        synchronized (lastNightSleepDecision) {
+            long previous = lastNightSleepDecision.getOrDefault(candidateBot.getUUID(), 0L);
+            if (now - previous < NIGHT_SLEEP_DECISION_INTERVAL_MS) return;
+            lastNightSleepDecision.put(candidateBot.getUUID(), now);
+        }
+
+        List<Entity> nearby = AutoFaceEntity.detectNearbyEntities(candidateBot, 32);
+        boolean hostileNearby = nearby.stream().anyMatch(entity -> entity instanceof Monster
+                || (entity instanceof net.minecraft.world.entity.player.Player player
+                && !player.getUUID().equals(candidateBot.getUUID())
+                && net.shasankp000.PlayerUtils.PlayerRetaliationTracker.isPlayerHostile(candidateBot, player)));
+        if (hostileNearby) return;
+
+        State state = createInitialState(candidateBot);
+        List<StateActions.Action> candidates = rlAgentHook.suggestPotentialActions(state);
+        Map<StateActions.Action, Double> risks = rlAgentHook.calculateRisk(state, candidates, candidateBot);
+        Map<StateActions.Action, Double> choice = rlAgentHook.chooseAction(
+                state, rlAgentHook.calculateRiskAppetite(state), risks, transitionHistory);
+        Map.Entry<StateActions.Action, Double> selected = choice.entrySet().iterator().next();
+        if (selected.getKey() != StateActions.Action.SLEEP) return;
+
+        CommandSourceStack source = candidateBot.createCommandSourceStack()
+                .withSuppressedOutput()
+                .withMaximumPermission(net.minecraft.server.permissions.PermissionSet.ALL_PERMISSIONS);
+        executeAction(StateActions.Action.SLEEP, source);
+
+        State nextState = createInitialState(candidateBot);
+        double reward = lastSleepActionSucceeded ? 50.0 : -20.0;
+        double qValue = rlAgentHook.calculateQValue(
+                state, StateActions.Action.SLEEP, reward, nextState, qTable);
+        qTable.addEntry(state, StateActions.Action.SLEEP, qValue, nextState);
+        transitionHistory.addTransition(new StateTransition(
+                state, nextState, StateActions.Action.SLEEP, reward,
+                nextState.getPodMap().getOrDefault(StateActions.Action.SLEEP, 0.0), false, -1));
+        rlAgentHook.decayEpsilon();
+        QTableStorage.saveQTable(qTable, "qtable.bin");
+        try {
+            QTableStorage.saveEpsilon(rlAgentHook.getEpsilon(),
+                    qTableDir + File.separator + "epsilon.bin");
+        } catch (IOException e) {
+            LOGGER.warn("Could not persist sleep-action epsilon", e);
+        }
+        LOGGER.info("RL selected SLEEP for '{}': {}", candidateBot.getName().getString(),
+                lastSleepActionSucceeded ? "slept" : "could not sleep");
     }
 
     /**
@@ -370,6 +433,8 @@ public class BotEventHandler {
                         actionPodMap.getOrDefault(chosenAction, 0.0)
                 );
 
+                reward = applySleepReward(chosenAction, reward);
+
                 System.out.println("Reward: " + reward);
 
                 // Check for death risk patterns before updating Q-value
@@ -526,6 +591,8 @@ public class BotEventHandler {
                         risk,
                         actionPodMap.getOrDefault(chosenAction, 0.0)
                 );
+
+                reward = applySleepReward(chosenAction, reward);
 
                 System.out.println("Reward: " + reward);
 
@@ -697,6 +764,7 @@ public class BotEventHandler {
     }
 
     private static void executeAction(StateActions.Action chosenAction, CommandSourceStack botSource) {
+        lastSleepActionSucceeded = false;
         switch (chosenAction) {
             case MOVE_FORWARD -> performAction("moveForward", botSource);
             case MOVE_BACKWARD -> performAction("moveBackward", botSource);
@@ -713,6 +781,11 @@ public class BotEventHandler {
             case ATTACK -> performAction("attack", botSource);
             case SHOOT_ARROW -> performAction("shootArrow", botSource);
             case EVADE -> performAction("evade", botSource);
+            case SLEEP -> {
+                lastSleepActionSucceeded = NearbyBedSleepController.attemptFromRl(botSource.getPlayer());
+                LOGGER.info("RL sleep action for '{}' {}", botSource.getTextName(),
+                        lastSleepActionSucceeded ? "succeeded" : "did not find a usable bed");
+            }
             case HOTBAR_1 -> performAction("hotbar1", botSource);
             case HOTBAR_2 -> performAction("hotbar2", botSource);
             case HOTBAR_3 -> performAction("hotbar3", botSource);
@@ -724,6 +797,11 @@ public class BotEventHandler {
             case HOTBAR_9 -> performAction("hotbar9", botSource);
             case STAY -> System.out.println("Performing action: Stay and do nothing");
         }
+    }
+
+    private static double applySleepReward(StateActions.Action action, double reward) {
+        if (action != StateActions.Action.SLEEP) return reward;
+        return reward + (lastSleepActionSucceeded ? 50.0 : -20.0);
     }
 
 

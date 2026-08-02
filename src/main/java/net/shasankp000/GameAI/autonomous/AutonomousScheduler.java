@@ -18,8 +18,6 @@ import java.util.concurrent.TimeUnit;
  *   <li><b>Drift-check / companion tick (every 2 s):</b> runs the companion
  *       stance ticks so FOLLOW bots navigate toward their target player and
  *       STAY bots return to their anchor if knocked back.</li>
- *   <li><b>Sleep check (every 2 s):</b> queues deterministic nearby-bed behavior
- *       when a WANDER bot is idle and vanilla permits sleeping.</li>
  * </ol>
  */
 public class AutonomousScheduler {
@@ -49,12 +47,6 @@ public class AutonomousScheduler {
         // Task 2: drift-check + companion stance tick every 2 seconds
         scheduler.scheduleAtFixedRate(
                 this::driftCheckTask,
-                2, 2, TimeUnit.SECONDS
-        );
-
-        // Task 3: deterministic nearby-bed sleep check every 2 seconds
-        scheduler.scheduleAtFixedRate(
-                this::sleepCheckTask,
                 2, 2, TimeUnit.SECONDS
         );
 
@@ -108,13 +100,4 @@ public class AutonomousScheduler {
         }
     }
 
-    /** Queue a sleep attempt when the bot is idle and vanilla permits sleeping. */
-    private void sleepCheckTask() {
-        try {
-            engine.requestNearbyBedSleep();
-        } catch (Exception e) {
-            LOGGER.error("[autonomous-scheduler] Sleep-check task error for '{}': {}",
-                    botName, e.getMessage(), e);
-        }
-    }
 }
