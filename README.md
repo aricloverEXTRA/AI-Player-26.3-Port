@@ -247,6 +247,7 @@ Upcoming second part will have the update in 1.20.6 as the final update for 1.20
 - Go to a location  
 - Go to a location and mine resources  
 - Detect nearby blocks & entities  
+- Sleep in nearby beds at night, or place and use a carried bed when needed
 - Report stats (health, oxygen, hunger, etc.)  
 
 ### API Integrations  
@@ -306,7 +307,7 @@ Here’s what’s planned for the **next patch**:
 - **Combat & Survival Enhancements**  
   - Bot uses weapons (including ranged) to fend off mobs.  
   - Reflex module upgrades.  
-  - More natural world interactions (e.g., sleeping at night).
+  - More natural world interactions beyond the implemented nighttime sleeping behavior.
   - A more lightweight but more powerful logic engine that will replace the current LLM based reasoning for the Meta-Decision Layer  
 
 - **Improved Path Tracer**  
@@ -498,4 +499,3 @@ Sub commands:
 The above command changes credits go to [Mr. Álvaro Carvalho](https://github.com/A11v1r15)
 
 And yes since this mod relies on carpet mod, you can spawn a bot using carpet mod's commands too and try the mod. But if you happen to be playing in offline mode, then I recommend using the mod's in built spawn command.
-

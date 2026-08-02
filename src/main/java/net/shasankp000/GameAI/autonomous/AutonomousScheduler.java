@@ -18,6 +18,8 @@ import java.util.concurrent.TimeUnit;
  *   <li><b>Drift-check / companion tick (every 2 s):</b> runs the companion
  *       stance ticks so FOLLOW bots navigate toward their target player and
  *       STAY bots return to their anchor if knocked back.</li>
+ *   <li><b>Sleep check (every 2 s):</b> queues deterministic nearby-bed behavior
+ *       when a WANDER bot is idle and vanilla permits sleeping.</li>
  * </ol>
  */
 public class AutonomousScheduler {
@@ -50,6 +52,12 @@ public class AutonomousScheduler {
                 2, 2, TimeUnit.SECONDS
         );
 
+        // Task 3: deterministic nearby-bed sleep check every 2 seconds
+        scheduler.scheduleAtFixedRate(
+                this::sleepCheckTask,
+                2, 2, TimeUnit.SECONDS
+        );
+
         LOGGER.info("[autonomous-scheduler] Started for bot '{}'", botName);
     }
 
@@ -69,7 +77,8 @@ public class AutonomousScheduler {
      */
     private void idleReplanTask() {
         try {
-            if (engine.queueSize() == 0 && !engine.isPlayerControlled()) {
+            if (engine.queueSize() == 0 && !engine.isPlayerControlled()
+                    && !engine.isExecutingGoal() && !engine.isBotSleeping()) {
                 LOGGER.info("[autonomous-scheduler] Queue empty for '{}' — triggering re-plan", botName);
                 engine.triggerReplan();
             }
@@ -96,6 +105,16 @@ public class AutonomousScheduler {
             companion.stayDriftCheck(botName);
         } catch (Exception e) {
             LOGGER.error("[autonomous-scheduler] Drift-check task error for '{}': {}", botName, e.getMessage(), e);
+        }
+    }
+
+    /** Queue a sleep attempt when the bot is idle and vanilla permits sleeping. */
+    private void sleepCheckTask() {
+        try {
+            engine.requestNearbyBedSleep();
+        } catch (Exception e) {
+            LOGGER.error("[autonomous-scheduler] Sleep-check task error for '{}': {}",
+                    botName, e.getMessage(), e);
         }
     }
 }

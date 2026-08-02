@@ -61,6 +61,15 @@ public class AutonomousGoalEngine {
     /** True once shutdown() has been called. */
     private final AtomicBoolean stopped = new AtomicBoolean(false);
 
+    /** Prevents the scheduler from stacking duplicate sleep requests. */
+    private final AtomicBoolean sleepGoalPending = new AtomicBoolean(false);
+
+    /** True while the serial worker is executing a dequeued goal. */
+    private final AtomicBoolean goalExecuting = new AtomicBoolean(false);
+
+    /** Deterministic survival behavior executed on this engine's serial goal worker. */
+    private final NearbyBedSleepController sleepController;
+
     /**
      * Priority queue — higher {@link GoalQueueEntry#priority()} values are
      * dequeued first.  Capacity is a soft hint; we enforce MAX_QUEUE_DEPTH
@@ -80,6 +89,7 @@ public class AutonomousGoalEngine {
     public AutonomousGoalEngine(String botName, UUID botUUID) {
         this.botName  = botName;
         this.botUUID  = botUUID;
+        this.sleepController = new NearbyBedSleepController(botName, playerControlled::get);
     }
 
     /**
@@ -96,6 +106,8 @@ public class AutonomousGoalEngine {
     public void shutdown() {
         stopped.set(true);
         goalQueue.clear();
+        sleepGoalPending.set(false);
+        sleepController.shutdown();
         executor.shutdownNow();
         LOGGER.info("[autonomous] Shut down for bot '{}'", botName);
     }
@@ -145,6 +157,9 @@ public class AutonomousGoalEngine {
      */
     public void setPlayerControlled(boolean controlled) {
         playerControlled.set(controlled);
+        if (controlled && goalQueue.removeIf(entry -> entry.source() == GoalQueueEntry.Source.SURVIVAL)) {
+            sleepGoalPending.set(false);
+        }
         if (!controlled) {
             LOGGER.debug("[autonomous] Resuming autonomous mode for bot '{}'", botName);
         }
@@ -159,12 +174,43 @@ public class AutonomousGoalEngine {
         return goalQueue.size();
     }
 
+    /** Returns true while the serial autonomous worker is executing a goal. */
+    boolean isExecutingGoal() {
+        return goalExecuting.get();
+    }
+
+    /** Returns true while the bot entity is currently sleeping. */
+    boolean isBotSleeping() {
+        return sleepController.isBotSleeping();
+    }
+
+    /**
+     * Queue one deterministic nearby-bed sleep attempt when the bot is idle.
+     * Eligibility is checked here and again when the queued goal executes.
+     */
+    void requestNearbyBedSleep() {
+        if (stopped.get() || playerControlled.get() || goalExecuting.get() || !goalQueue.isEmpty()) return;
+        if (!sleepGoalPending.compareAndSet(false, true)) return;
+
+        if (!sleepController.shouldQueueAttempt()) {
+            sleepGoalPending.set(false);
+            return;
+        }
+
+        boolean accepted = enqueue(new GoalQueueEntry(
+                "sleep in a nearby bed",
+                30,
+                GoalQueueEntry.Source.SURVIVAL));
+        if (!accepted) sleepGoalPending.set(false);
+    }
+
     /**
      * Trigger a fresh LLM re-plan and replace the current queue.
      * Called by {@link AutonomousScheduler} on its idle re-plan tick.
      */
     public void triggerReplan() {
         goalQueue.clear();
+        sleepGoalPending.set(false);
         generateAndEnqueueGoals();
     }
 
@@ -238,11 +284,23 @@ public class AutonomousGoalEngine {
                     continue;
                 }
 
+                // Sleeping is itself the active survival action. Do not dequeue
+                // ordinary goals until vanilla wakes the bot.
+                if (sleepController.isBotSleeping()) {
+                    Thread.sleep(500);
+                    continue;
+                }
+
                 // Block up to 5 s waiting for a goal
                 GoalQueueEntry entry = goalQueue.poll(5, TimeUnit.SECONDS);
                 if (entry == null) continue;
 
-                executeGoal(entry);
+                goalExecuting.set(true);
+                try {
+                    executeGoal(entry);
+                } finally {
+                    goalExecuting.set(false);
+                }
 
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
@@ -259,6 +317,15 @@ public class AutonomousGoalEngine {
                 entry.goalText(), entry.priority(), entry.source());
 
         String llmProvider = System.getProperty("aiplayer.llmMode", "custom");
+
+        if (entry.source() == GoalQueueEntry.Source.SURVIVAL) {
+            try {
+                sleepController.attemptSleep();
+            } finally {
+                sleepGoalPending.set(false);
+            }
+            return;
+        }
 
         // For WORLD_EVENT goals that are purely conversational, route through
         // LLMServiceHandler so the bot produces a natural chat response.
