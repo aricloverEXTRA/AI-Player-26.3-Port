@@ -18,6 +18,7 @@ import net.shasankp000.Database.SQLiteDB;
 import net.shasankp000.FilingSystem.ManualConfig;
 import net.shasankp000.GameAI.BotEventHandler;
 import net.shasankp000.GameAI.autonomous.AutonomousManager;
+import net.shasankp000.GameAI.autonomous.AutomaticEatingController;
 import net.shasankp000.GameAI.autonomous.ServerChatEventBridge;
 import net.shasankp000.GameAI.handoff.ItemHandoffListener;
 import net.shasankp000.GameAI.handoff.TradeListener;
@@ -103,6 +104,9 @@ public class AIPlayer implements ModInitializer {
 		// an item while sneaking near the bot, driving the two-phase chat-based trade flow.
 		TradeListener.register();
 
+		// Idle-time survival maintenance: eat safe inventory food at low hunger.
+		AutomaticEatingController.register();
+
 
 		CompletableFuture.runAsync(() -> {
 
@@ -144,6 +148,7 @@ public class AIPlayer implements ModInitializer {
 		});
 
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+			AutomaticEatingController.reset();
 
 			AutoFaceEntity.onServerStopped(server);
 
@@ -168,6 +173,7 @@ public class AIPlayer implements ModInitializer {
         ServerLivingEntityEvents.AFTER_DEATH.register((entity, damageSource) -> {
             if (entity instanceof ServerPlayer serverPlayer) {
                 if (BotEventHandler.bot != null && serverPlayer.getUUID().equals(BotEventHandler.bot.getUUID())) {
+                    AutomaticEatingController.clear(serverPlayer);
                     // Save state first
                     QTableStorage.saveLastKnownState(BotEventHandler.getCurrentState(), BotEventHandler.qTableDir + "/lastKnownState.bin");
 

@@ -90,6 +90,8 @@ public class AutoFaceEntity {
         // Stop any existing executor for this bot
         LOGGER.info("========== STARTING AUTOFACE FOR BOT: {} ==========", bot.getName().getString());
 
+        MinecraftServer server = bot.createCommandSourceStack().getServer();
+        BotEventHandler.setActiveBot(server, bot);
         Bot = bot;
 
         stopAutoFace(bot);
@@ -97,8 +99,6 @@ public class AutoFaceEntity {
         ScheduledExecutorService botExecutor = Executors.newSingleThreadScheduledExecutor();
 
         botExecutors.put(bot, botExecutor);
-
-        MinecraftServer server = bot.createCommandSourceStack().getServer();
 
         // Load Q-table from storage
         try {

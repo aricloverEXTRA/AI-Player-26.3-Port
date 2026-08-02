@@ -27,6 +27,7 @@ import net.shasankp000.WorldUitls.isBlockItem;
 import net.shasankp000.GameAI.mood.MoodEngine;
 import net.shasankp000.GameAI.persona.PersonaRegistry;
 import net.shasankp000.GameAI.autonomous.NearbyBedSleepController;
+import net.shasankp000.GameAI.autonomous.AutomaticEatingController;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -89,9 +90,16 @@ public class BotEventHandler {
 
 
     public BotEventHandler(MinecraftServer server, ServerPlayer bot) {
+        setActiveBot(server, bot);
+    }
+
+    /**
+     * Records the active AI bot as soon as its lifecycle starts. Survival
+     * controllers must not have to wait for a combat event to discover it.
+     */
+    public static void setActiveBot(MinecraftServer server, ServerPlayer bot) {
         BotEventHandler.server = server;
         BotEventHandler.bot = bot;
-
     }
 
     // ── Mood / Persona lifecycle ──────────────────────────────────────────────
@@ -102,6 +110,9 @@ public class BotEventHandler {
      * state does not bleed into the next spawn.
      */
     public static void onBotDespawn(String botName) {
+        if (bot != null && bot.getName().getString().equals(botName)) {
+            AutomaticEatingController.clear(bot);
+        }
         MoodEngine.evict(botName);
         PersonaRegistry.evict(botName);
         LOGGER.info("[mood/persona] Evicted state for bot '{}'", botName);
