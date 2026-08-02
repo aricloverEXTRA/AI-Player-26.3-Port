@@ -69,7 +69,8 @@ public class AutonomousScheduler {
      */
     private void idleReplanTask() {
         try {
-            if (engine.queueSize() == 0 && !engine.isPlayerControlled()) {
+            if (engine.queueSize() == 0 && !engine.isPlayerControlled()
+                    && !engine.isExecutingGoal() && !engine.isBotSleeping()) {
                 LOGGER.info("[autonomous-scheduler] Queue empty for '{}' — triggering re-plan", botName);
                 engine.triggerReplan();
             }
@@ -98,4 +99,5 @@ public class AutonomousScheduler {
             LOGGER.error("[autonomous-scheduler] Drift-check task error for '{}': {}", botName, e.getMessage(), e);
         }
     }
+
 }
