@@ -168,7 +168,7 @@ public class AutonomousGoalEngine {
     }
 
     /** Returns true while the serial autonomous worker is executing a goal. */
-    public boolean isExecutingGoal() {
+    boolean isExecutingGoal() {
         return goalExecuting.get();
     }
 
@@ -260,13 +260,6 @@ public class AutonomousGoalEngine {
                 // ordinary goals until vanilla wakes the bot.
                 if (sleepController.isBotSleeping()) {
                     Thread.sleep(500);
-                    continue;
-                }
-
-                // Low-hunger maintenance runs only between goals. Yield here so
-                // the server-tick eating controller can claim the idle window.
-                if (AutomaticEatingController.shouldPauseGoals(botUUID)) {
-                    Thread.sleep(100);
                     continue;
                 }
 

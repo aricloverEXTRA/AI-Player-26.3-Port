@@ -6,7 +6,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.shasankp000.Commands.modCommandRegistry;
-import net.shasankp000.GameAI.autonomous.AutomaticEatingController;
+import net.shasankp000.PlayerUtils.FoodConsumptionTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -114,7 +114,7 @@ public class PathTracer {
 
         private void executeSegment(Segment segment) {
             ServerPlayer player = botSource.getPlayer();
-            if (player != null && AutomaticEatingController.isMaintenancePaused(player.getUUID())) {
+            if (player != null && FoodConsumptionTool.isConsumptionInProgress(player.getUUID())) {
                 scheduler.schedule(() -> executeSegment(segment), 50L, TimeUnit.MILLISECONDS);
                 return;
             }
@@ -177,12 +177,12 @@ public class PathTracer {
 
             UUID botId = player.getUUID();
             long wallStart = System.currentTimeMillis();
-            long pausedAtStart = AutomaticEatingController.getTotalPausedMillis(botId);
+            long pausedAtStart = FoodConsumptionTool.getTotalPausedMillis(botId);
 
             Runnable[] check = new Runnable[1];
             check[0] = () -> {
                 long wallElapsed = System.currentTimeMillis() - wallStart;
-                long pausedElapsed = AutomaticEatingController.getTotalPausedMillis(botId) - pausedAtStart;
+                long pausedElapsed = FoodConsumptionTool.getTotalPausedMillis(botId) - pausedAtStart;
                 long activeElapsed = Math.max(0L, wallElapsed - pausedElapsed);
                 long remaining = delayMillis - activeElapsed;
 

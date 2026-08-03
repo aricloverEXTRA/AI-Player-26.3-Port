@@ -16,7 +16,6 @@ import net.shasankp000.GameAI.RLAgent;
 import net.shasankp000.Commands.modCommandRegistry;
 import net.shasankp000.Database.QTableStorage;
 import net.shasankp000.GameAI.proximity.ProximityTracker;
-import net.shasankp000.GameAI.autonomous.AutomaticEatingController;
 import net.shasankp000.PlayerUtils.BlockDistanceLimitedSearch;
 import net.shasankp000.PlayerUtils.blockDetectionUnit;
 import net.shasankp000.PlayerUtils.ProjectileDefenseUtils;
@@ -147,12 +146,6 @@ public class AutoFaceEntity {
             // Run detection and facing logic
 
             if (server != null && server.isRunning() && bot.isAlive()) {
-
-                // Automatic eating is a short maintenance interrupt. Combat and
-                // facing logic resume with their saved inputs after it completes.
-                if (AutomaticEatingController.isMaintenancePaused(bot.getUUID())) {
-                    return;
-                }
 
                 // ===== PRIORITY: UPDATE EVASION STATUS =====
                 // Check if bot should continue evading or stop (distance-based)
@@ -542,6 +535,10 @@ public class AutoFaceEntity {
                     // Clear hostile entity flags
                     botBusy = false;
                     hostileEntityInFront = false;
+
+                    // Low hunger is evaluated by the RL policy. USE_ITEM is not
+                    // forced: its observed hunger gain is learned as a Q transition.
+                    BotEventHandler.considerLowHunger(finalRlAgent, qTable, bot);
 
                     // Safe nighttime has no combat trigger, so explicitly let the
                     // learned policy evaluate its SLEEP action while the bot is idle.

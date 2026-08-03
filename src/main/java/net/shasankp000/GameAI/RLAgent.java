@@ -11,6 +11,7 @@ import net.shasankp000.PlayerUtils.ResourceEvaluator;
 import net.shasankp000.PlayerUtils.ThreatDetector;
 import net.shasankp000.PlayerUtils.ProjectileDefenseUtils;
 import net.shasankp000.PlayerUtils.MobThreatEvaluator;
+import net.shasankp000.PlayerUtils.FoodConsumptionTool;
 import net.minecraft.world.item.ItemStack;
 import net.shasankp000.Commands.modCommandRegistry;
 import org.slf4j.Logger;
@@ -130,6 +131,9 @@ public class RLAgent {
         for (Map.Entry<StateActionPair, QEntry> entry : qTable.getTable().entrySet()) {
             StateActionPair pair = entry.getKey();
             QEntry qEntry = entry.getValue();
+
+            // Never exploit an action outside the caller's current action space.
+            if (!riskMap.containsKey(pair.getAction())) continue;
 
             if (State.isStateConsistent(pair.getState(), currentState)) {
                 State nextState = entry.getValue().getNextState();
@@ -508,12 +512,15 @@ public class RLAgent {
                     break;
 
                 case USE_ITEM:
-                    if (currentState.getSelectedItemStack().isFood() && currentState.getBotHungerLevel() > 13) {
-                        risk += 3.0; // Penalize using food unnecessarily
-                    }
-
-                    else {
-                        risk += 0.0; // pointless calling this action
+                    boolean safeFoodAvailable = FoodConsumptionTool.hasSafeFood(bot);
+                    if (safeFoodAvailable && currentState.getBotHungerLevel() <= 8) {
+                        risk -= 15.0; // Strongly favor eating when hunger is genuinely low.
+                    } else if (safeFoodAvailable && currentState.getBotHungerLevel() <= 13) {
+                        risk -= 4.0; // Eating is useful, but not yet urgent.
+                    } else if (currentState.getSelectedItemStack().isFood()) {
+                        risk += 5.0; // Penalize consuming food unnecessarily.
+                    } else {
+                        risk += 0.0;
                     }
 
                     break;
@@ -1522,7 +1529,7 @@ public class RLAgent {
                 if (currentState.getDistanceToDangerZone() < 5) weight += 2; // Higher weight if near danger zone
                 break;
             case USE_ITEM:
-                if (currentState.getBotHealth() < 10 || currentState.getBotHungerLevel() < 8) weight += 3; // Prioritize consumables
+                if (currentState.getBotHealth() < 10 || currentState.getBotHungerLevel() <= 8) weight += 3; // Prioritize consumables
                 break;
             case SLEEP:
                 if ("night".equals(currentState.getTimeOfDay())

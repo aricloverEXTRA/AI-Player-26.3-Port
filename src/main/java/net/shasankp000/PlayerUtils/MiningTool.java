@@ -6,7 +6,6 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.level.block.state.BlockState;
 import net.shasankp000.Entity.LookController;
-import net.shasankp000.GameAI.autonomous.AutomaticEatingController;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -34,7 +33,7 @@ public class MiningTool {
 
                 // Step 4: Start mining loop
                 ScheduledFuture<?> task = miningExecutor.scheduleAtFixedRate(() -> {
-                    if (AutomaticEatingController.isMaintenancePaused(bot.getUUID())) return;
+                    if (FoodConsumptionTool.isConsumptionInProgress(bot.getUUID())) return;
 
                     BlockState currentState = bot.level().getBlockState(targetBlockPos);
 
@@ -80,4 +79,3 @@ public class MiningTool {
     }
 
 }
-
