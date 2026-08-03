@@ -1,5 +1,7 @@
 package net.shasankp000.GameAI.autonomous;
 
+import carpet.fakes.ServerPlayerInterface;
+import carpet.helpers.EntityPlayerActionPack;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.minecraft.core.component.DataComponents;
 import net.minecraft.core.registries.BuiltInRegistries;
@@ -11,10 +13,7 @@ import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.food.FoodProperties;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.Consumable;
-import net.shasankp000.Entity.AutoFaceEntity;
 import net.shasankp000.GameAI.BotEventHandler;
-import net.shasankp000.PathFinding.PathTracer;
-import net.shasankp000.PlayerUtils.blockDetectionUnit;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -61,6 +60,8 @@ public final class AutomaticEatingController {
     private static final Map<UUID, EatingSession> SESSIONS = new HashMap<>();
     private static final Map<UUID, Integer> NEXT_ATTEMPT_TICK = new HashMap<>();
     private static final Set<UUID> WAITING_TO_EAT = ConcurrentHashMap.newKeySet();
+    private static final Map<UUID, Long> PAUSE_STARTED_AT = new ConcurrentHashMap<>();
+    private static final Map<UUID, Long> TOTAL_PAUSED_MILLIS = new ConcurrentHashMap<>();
 
     private AutomaticEatingController() {}
 
@@ -80,6 +81,7 @@ public final class AutomaticEatingController {
         }
         NEXT_ATTEMPT_TICK.remove(bot.getUUID());
         WAITING_TO_EAT.remove(bot.getUUID());
+        finishMaintenancePause(bot.getUUID());
     }
 
     /** Cancels all sessions. Called during server shutdown. */
@@ -90,6 +92,8 @@ public final class AutomaticEatingController {
         SESSIONS.clear();
         NEXT_ATTEMPT_TICK.clear();
         WAITING_TO_EAT.clear();
+        PAUSE_STARTED_AT.clear();
+        TOTAL_PAUSED_MILLIS.clear();
     }
 
     /**
@@ -98,6 +102,35 @@ public final class AutomaticEatingController {
      */
     public static boolean shouldPauseGoals(UUID botId) {
         return WAITING_TO_EAT.contains(botId);
+    }
+
+    /** Returns true while the bot's task inputs are suspended for eating. */
+    public static boolean isMaintenancePaused(UUID botId) {
+        return PAUSE_STARTED_AT.containsKey(botId);
+    }
+
+    /**
+     * Returns cumulative wall-clock time spent in automatic-eating pauses.
+     * Timed movement uses this to count active movement time instead of pause time.
+     */
+    public static long getTotalPausedMillis(UUID botId) {
+        long completed = TOTAL_PAUSED_MILLIS.getOrDefault(botId, 0L);
+        Long started = PAUSE_STARTED_AT.get(botId);
+        return started == null ? completed : completed + Math.max(0L, System.currentTimeMillis() - started);
+    }
+
+    /** Cooperatively blocks an autonomous worker between actions until eating is done. */
+    public static void awaitResume(ServerPlayer bot) {
+        if (bot == null) return;
+        UUID botId = bot.getUUID();
+        while (isMaintenancePaused(botId) && bot.isAlive() && !bot.hasDisconnected()) {
+            try {
+                Thread.sleep(50L);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return;
+            }
+        }
     }
 
     private static void tick(MinecraftServer server) {
@@ -133,7 +166,6 @@ public final class AutomaticEatingController {
         }
 
         WAITING_TO_EAT.add(botId);
-        if (isBusy(bot, true)) return;
         if (server.getTickCount() < NEXT_ATTEMPT_TICK.getOrDefault(botId, 0)) return;
 
         startEating(server, bot, candidate);
@@ -141,13 +173,6 @@ public final class AutomaticEatingController {
 
     private static void tickSession(MinecraftServer server, EatingSession session) {
         ServerPlayer bot = session.bot;
-
-        if (isBusy(bot, false)) {
-            SESSIONS.remove(bot.getUUID());
-            stopAndRestore(session, "higher-priority activity started");
-            scheduleRetry(server, bot);
-            return;
-        }
 
         if (bot.isUsingItem()) {
             if (server.getTickCount() - session.startedAtTick > MAX_EATING_TICKS) {
@@ -160,6 +185,7 @@ public final class AutomaticEatingController {
 
         SESSIONS.remove(bot.getUUID());
         restoreInventory(session);
+        resumeActions(session);
         if (bot.getFoodData().getFoodLevel() > HUNGER_THRESHOLD) {
             WAITING_TO_EAT.remove(bot.getUUID());
         }
@@ -169,6 +195,7 @@ public final class AutomaticEatingController {
     }
 
     private static void startEating(MinecraftServer server, ServerPlayer bot, FoodCandidate candidate) {
+        PausedActions pausedActions = pauseActions(bot);
         Inventory inventory = bot.getInventory();
         int previousSelectedSlot = inventory.getSelectedSlot();
         int useSlot = candidate.slot < 9 ? candidate.slot : previousSelectedSlot;
@@ -186,6 +213,7 @@ public final class AutomaticEatingController {
                 useSlot,
                 swapped,
                 displacedStack,
+                pausedActions,
                 server.getTickCount()
         );
 
@@ -195,6 +223,7 @@ public final class AutomaticEatingController {
 
         if (!result.consumesAction() || !bot.isUsingItem()) {
             restoreInventory(session);
+            resumeActions(session);
             scheduleRetry(server, bot);
             LOGGER.debug("Could not start eating {} for {}", candidate.itemId, bot.getName().getString());
             return;
@@ -249,35 +278,62 @@ public final class AutomaticEatingController {
                 && !bot.isSleeping();
     }
 
-    /**
-     * @param includeItemUse true before starting; false while tracking this
-     *                       controller's own eating animation.
-     */
-    private static boolean isBusy(ServerPlayer bot, boolean includeItemUse) {
-        if (includeItemUse && bot.isUsingItem()) return true;
-        if (AutoFaceEntity.botBusy
-                || AutoFaceEntity.isBotExecutingTask()
-                || AutoFaceEntity.isBotMoving
-                || AutoFaceEntity.isShooting
-                || AutoFaceEntity.isActivelyBlocking
-                || AutoFaceEntity.isDefendingFromProjectile()) {
-            return true;
-        }
-        if (AutoFaceEntity.hostileEntities != null && !AutoFaceEntity.hostileEntities.isEmpty()) return true;
-        if (PathTracer.BotSegmentManager.getBotMovementStatus()
-                || blockDetectionUnit.getBlockDetectionStatus()) {
-            return true;
-        }
-
-        AutonomousGoalEngine engine = AutonomousManager.getInstance()
-                .getEngine(bot.getName().getString());
-        return engine != null && (engine.isExecutingGoal() || engine.isPlayerControlled());
-    }
-
     private static void stopAndRestore(EatingSession session, String reason) {
         if (session.bot.isUsingItem()) session.bot.stopUsingItem();
         restoreInventory(session);
+        resumeActions(session);
         LOGGER.debug("Stopped automatic eating for {}: {}", session.bot.getName().getString(), reason);
+    }
+
+    private static PausedActions pauseActions(ServerPlayer bot) {
+        UUID botId = bot.getUUID();
+        PAUSE_STARTED_AT.putIfAbsent(botId, System.currentTimeMillis());
+
+        if (!(bot instanceof ServerPlayerInterface playerInterface)) {
+            if (bot.isUsingItem()) bot.stopUsingItem();
+            return null;
+        }
+
+        EntityPlayerActionPack liveActions = playerInterface.getActionPack();
+        boolean wasSprinting = bot.isSprinting();
+        boolean wasSneaking = bot.isShiftKeyDown();
+
+        // Capture the live pack before explicitly stopping it. Construction may
+        // clear the entity's visible movement flags, but it does not mutate the
+        // live pack, and no game tick can occur between these server-tick calls.
+        EntityPlayerActionPack savedActions = new EntityPlayerActionPack(bot);
+        savedActions.copyFrom(liveActions);
+        liveActions.stopAll();
+        if (bot.isUsingItem()) bot.stopUsingItem();
+
+        return new PausedActions(savedActions, wasSprinting, wasSneaking);
+    }
+
+    private static void resumeActions(EatingSession session) {
+        UUID botId = session.bot.getUUID();
+        try {
+            if (session.bot.isAlive()
+                    && !session.bot.hasDisconnected()
+                    && session.pausedActions != null
+                    && session.bot instanceof ServerPlayerInterface playerInterface) {
+                playerInterface.getActionPack().copyFrom(session.pausedActions.actionPack);
+                session.bot.setShiftKeyDown(session.pausedActions.wasSneaking);
+                session.bot.setSprinting(session.pausedActions.wasSprinting);
+            }
+        } finally {
+            finishMaintenancePause(botId);
+        }
+    }
+
+    private static void finishMaintenancePause(UUID botId) {
+        Long started = PAUSE_STARTED_AT.remove(botId);
+        if (started != null) {
+            TOTAL_PAUSED_MILLIS.merge(
+                    botId,
+                    Math.max(0L, System.currentTimeMillis() - started),
+                    Long::sum
+            );
+        }
     }
 
     private static void restoreInventory(EatingSession session) {
@@ -322,7 +378,14 @@ public final class AutomaticEatingController {
             int useSlot,
             boolean swapped,
             ItemStack displacedStack,
+            PausedActions pausedActions,
             int startedAtTick
+    ) {}
+
+    private record PausedActions(
+            EntityPlayerActionPack actionPack,
+            boolean wasSprinting,
+            boolean wasSneaking
     ) {}
 
     private record FoodCandidate(int slot, String itemId, int nutrition, float saturation) {

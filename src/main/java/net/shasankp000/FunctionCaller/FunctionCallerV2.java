@@ -42,6 +42,7 @@ import net.shasankp000.ChatUtils.ChatUtils;
 import net.shasankp000.Entity.EntityDetails;
 
 import net.shasankp000.GameAI.BotEventHandler;
+import net.shasankp000.GameAI.autonomous.AutomaticEatingController;
 
 import net.shasankp000.GameAI.State;
 
@@ -1847,6 +1848,10 @@ public class FunctionCallerV2 {
             final int stepIndex = i;
 
             sequentialExecution = sequentialExecution.thenCompose(_void -> {
+                // Hunger maintenance may suspend a busy plan between atomic
+                // actions. Continue this exact plan after eating completes.
+                AutomaticEatingController.awaitResume(botSource.getPlayer());
+
                 // Get state BEFORE action
                 State stateBefore = initialState; // TODO: Could update this per step
 

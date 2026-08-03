@@ -6,6 +6,7 @@ import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
 import net.shasankp000.Commands.modCommandRegistry;
+import net.shasankp000.GameAI.autonomous.AutomaticEatingController;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -112,6 +113,12 @@ public class PathTracer {
         }
 
         private void executeSegment(Segment segment) {
+            ServerPlayer player = botSource.getPlayer();
+            if (player != null && AutomaticEatingController.isMaintenancePaused(player.getUUID())) {
+                scheduler.schedule(() -> executeSegment(segment), 50L, TimeUnit.MILLISECONDS);
+                return;
+            }
+
             LOGGER.info("START segment: " + segment);
             updateFacing(segment);
 
@@ -135,10 +142,10 @@ public class PathTracer {
 
             // Schedule jump if required, slightly before reaching the target to ensure proper timing
             if (segment.jump()) {
-                scheduler.schedule(() -> {
+                scheduleAfterActiveDelay(player, jumpDelay, () -> {
                     server.getCommands().performPrefixedCommand(botSource, "/player " + botName + " jump");
                     LOGGER.info(botName + " performed a jump!");
-                }, jumpDelay, TimeUnit.MILLISECONDS); // Jump 200ms before reaching target
+                }); // Jump 200ms before reaching target
             }
 
             if (segment.sprint()) {
@@ -149,15 +156,44 @@ public class PathTracer {
                 server.getCommands().performPrefixedCommand(botSource, "/player " + botName + " unsprint");
             }
 
-            scheduler.schedule(() -> {
+            scheduleAfterActiveDelay(player, delayMillis, () -> {
                 modCommandRegistry.stopMoving(server, botSource, botName);
                 LOGGER.info(botName + " has stopped walking!");
-            }, delayMillis, TimeUnit.MILLISECONDS);
+            });
 
             isMoving = true;
 
             // Increased delay to allow for movement settling
-            scheduler.schedule(() -> waitForSegmentCompletion(segment), delayMillis + 100, TimeUnit.MILLISECONDS);
+            scheduleAfterActiveDelay(player, delayMillis + 100,
+                    () -> waitForSegmentCompletion(segment));
+        }
+
+        /** Schedules path work by active movement time, excluding eating pauses. */
+        private void scheduleAfterActiveDelay(ServerPlayer player, long delayMillis, Runnable task) {
+            if (player == null) {
+                scheduler.schedule(task, delayMillis, TimeUnit.MILLISECONDS);
+                return;
+            }
+
+            UUID botId = player.getUUID();
+            long wallStart = System.currentTimeMillis();
+            long pausedAtStart = AutomaticEatingController.getTotalPausedMillis(botId);
+
+            Runnable[] check = new Runnable[1];
+            check[0] = () -> {
+                long wallElapsed = System.currentTimeMillis() - wallStart;
+                long pausedElapsed = AutomaticEatingController.getTotalPausedMillis(botId) - pausedAtStart;
+                long activeElapsed = Math.max(0L, wallElapsed - pausedElapsed);
+                long remaining = delayMillis - activeElapsed;
+
+                if (remaining <= 0L) {
+                    task.run();
+                } else {
+                    scheduler.schedule(check[0], Math.min(remaining, 50L), TimeUnit.MILLISECONDS);
+                }
+            };
+
+            scheduler.schedule(check[0], delayMillis, TimeUnit.MILLISECONDS);
         }
 
         private void waitForSegmentCompletion(Segment completedSegment) {
