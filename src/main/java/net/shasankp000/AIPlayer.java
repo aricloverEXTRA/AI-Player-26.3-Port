@@ -30,6 +30,7 @@ import net.shasankp000.Network.SaveAPIKeyPayload;
 import net.shasankp000.Network.SaveConfigPayload;
 import net.shasankp000.Network.SaveCustomProviderPayload;
 import net.shasankp000.Network.configNetworkManager;
+import net.shasankp000.PlayerUtils.FoodConsumptionTool;
 import net.shasankp000.WebSearch.AISearchConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -103,7 +104,6 @@ public class AIPlayer implements ModInitializer {
 		// an item while sneaking near the bot, driving the two-phase chat-based trade flow.
 		TradeListener.register();
 
-
 		CompletableFuture.runAsync(() -> {
 
 			AISearchConfig.setupIfMissing();
@@ -144,6 +144,7 @@ public class AIPlayer implements ModInitializer {
 		});
 
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
+			FoodConsumptionTool.reset();
 
 			AutoFaceEntity.onServerStopped(server);
 

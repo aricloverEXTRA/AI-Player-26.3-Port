@@ -33,6 +33,8 @@ public class MiningTool {
 
                 // Step 4: Start mining loop
                 ScheduledFuture<?> task = miningExecutor.scheduleAtFixedRate(() -> {
+                    if (FoodConsumptionTool.isConsumptionInProgress(bot.getUUID())) return;
+
                     BlockState currentState = bot.level().getBlockState(targetBlockPos);
 
                     if (currentState.isAir()) {
@@ -77,5 +79,3 @@ public class MiningTool {
     }
 
 }
-
-

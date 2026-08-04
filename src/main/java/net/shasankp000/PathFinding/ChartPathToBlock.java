@@ -8,6 +8,7 @@ import net.minecraft.server.level.ServerPlayer;
 import net.minecraft.util.Mth;
 import net.minecraft.world.phys.Vec3;
 import net.shasankp000.Entity.LookController;
+import net.shasankp000.PlayerUtils.FoodConsumptionTool;
 import net.shasankp000.PlayerUtils.blockDetectionUnit;
 
 import java.util.Objects;
@@ -22,6 +23,8 @@ public class ChartPathToBlock {
 
         // Start micro nav
         while (true) {
+            FoodConsumptionTool.awaitResume(bot);
+
             // Face the block
             LookController.faceBlock(bot, targetBlockPos);
 

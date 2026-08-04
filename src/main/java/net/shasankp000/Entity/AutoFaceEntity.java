@@ -90,6 +90,8 @@ public class AutoFaceEntity {
         // Stop any existing executor for this bot
         LOGGER.info("========== STARTING AUTOFACE FOR BOT: {} ==========", bot.getName().getString());
 
+        MinecraftServer server = bot.createCommandSourceStack().getServer();
+        BotEventHandler.setActiveBot(server, bot);
         Bot = bot;
 
         stopAutoFace(bot);
@@ -97,8 +99,6 @@ public class AutoFaceEntity {
         ScheduledExecutorService botExecutor = Executors.newSingleThreadScheduledExecutor();
 
         botExecutors.put(bot, botExecutor);
-
-        MinecraftServer server = bot.createCommandSourceStack().getServer();
 
         // Load Q-table from storage
         try {
@@ -535,6 +535,10 @@ public class AutoFaceEntity {
                     // Clear hostile entity flags
                     botBusy = false;
                     hostileEntityInFront = false;
+
+                    // Low hunger is evaluated by the RL policy. USE_ITEM is not
+                    // forced: its observed hunger gain is learned as a Q transition.
+                    BotEventHandler.considerLowHunger(finalRlAgent, qTable, bot);
 
                     // Safe nighttime has no combat trigger, so explicitly let the
                     // learned policy evaluate its SLEEP action while the bot is idle.

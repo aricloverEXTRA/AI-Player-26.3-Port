@@ -1160,6 +1160,8 @@ public class modCommandRegistry {
 
             if (bot!=null) {
 
+                BotEventHandler.setActiveBot(server, bot);
+
                 Objects.requireNonNull(bot.getAttribute(Attributes.KNOCKBACK_RESISTANCE)).setBaseValue(0.0);
 
                 RespawnHandler.registerRespawnListener(bot);
@@ -1194,6 +1196,8 @@ public class modCommandRegistry {
             if (bot!=null) {
 
                 final String spawnedBotName = bot.getName().getString();
+
+                BotEventHandler.setActiveBot(server, bot);
 
                 Objects.requireNonNull(bot.getAttribute(Attributes.KNOCKBACK_RESISTANCE)).setBaseValue(0.0);
 
