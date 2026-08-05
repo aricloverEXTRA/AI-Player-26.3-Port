@@ -105,6 +105,20 @@ public class ToolVerifiers {
                 if (bot != null) success = success && bot.getHealth() >= 0;
                 return new VerificationResult(success, Map.of("level", level));
             },
+            "equipArmor", (params, state, bot) -> {
+                if (bot == null) {
+                    return new VerificationResult(false, Map.of("error", "Bot entity is unavailable"));
+                }
+                int equippedCount = 0;
+                for (var slot : new net.minecraft.world.entity.EquipmentSlot[]{
+                        net.minecraft.world.entity.EquipmentSlot.HEAD,
+                        net.minecraft.world.entity.EquipmentSlot.CHEST,
+                        net.minecraft.world.entity.EquipmentSlot.LEGS,
+                        net.minecraft.world.entity.EquipmentSlot.FEET}) {
+                    if (!bot.getItemBySlot(slot).isEmpty()) equippedCount++;
+                }
+                return new VerificationResult(equippedCount > 0, Map.of("equippedArmorPieces", equippedCount));
+            },
             "placeBlock", (params, state, bot) -> {
                 Object xObj = state.get("lastPlacedBlock.x");
                 Object yObj = state.get("lastPlacedBlock.y");
