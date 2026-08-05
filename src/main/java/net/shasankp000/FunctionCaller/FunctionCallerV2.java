@@ -548,6 +548,51 @@ public class FunctionCallerV2 {
             getFunctionOutput("Remaining hearts: " + getHealth.getBotHealthLevel(Objects.requireNonNull(botSource.getPlayer())));
         }
 
+        /** equipArmor: equip the best armor available in inventory **/
+        private static void equipArmor() {
+            if (botSource == null || botSource.getPlayer() == null) {
+                getFunctionOutput("Bot not found.");
+                return;
+            }
+
+            ServerPlayer bot = botSource.getPlayer();
+            MinecraftServer server = botSource.getServer();
+            CompletableFuture<Integer> equippedCountFuture = new CompletableFuture<>();
+            Runnable equipAction = () -> {
+                try {
+                    armorUtils.autoEquipArmor(bot);
+                    int equippedCount = 0;
+                    for (var slot : new net.minecraft.world.entity.EquipmentSlot[]{
+                            net.minecraft.world.entity.EquipmentSlot.HEAD,
+                            net.minecraft.world.entity.EquipmentSlot.CHEST,
+                            net.minecraft.world.entity.EquipmentSlot.LEGS,
+                            net.minecraft.world.entity.EquipmentSlot.FEET}) {
+                        if (!bot.getItemBySlot(slot).isEmpty()) equippedCount++;
+                    }
+                    equippedCountFuture.complete(equippedCount);
+                } catch (Exception e) {
+                    equippedCountFuture.completeExceptionally(e);
+                }
+            };
+
+            try {
+                if (server.isSameThread()) {
+                    equipAction.run();
+                } else {
+                    server.execute(equipAction);
+                }
+                int equippedCount = equippedCountFuture.get(5, TimeUnit.SECONDS);
+                if (equippedCount > 0) {
+                    getFunctionOutput("Equipped best available armor; " + equippedCount + " armor piece(s) equipped.");
+                } else {
+                    getFunctionOutput("No armor was available to equip.");
+                }
+            } catch (Exception e) {
+                logger.error("Failed to equip armor", e);
+                getFunctionOutput("Failed to equip armor: " + e.getMessage());
+            }
+        }
+
         private static void webSearch(String query) {
             System.out.println("Running web search...");
             getFunctionOutput("Web search result: " + WebSearchTool.search(query));
@@ -1744,6 +1789,10 @@ public class FunctionCallerV2 {
                 case "getHealthLevel" -> {
                     logger.info("Calling method: getHealthLevel");
                     Tools.getHealthLevel();
+                }
+                case "equipArmor" -> {
+                    logger.info("Calling method: equipArmor");
+                    Tools.equipArmor();
                 }
                 case "updateState" -> {
                     String keysRaw = paramMap.get("keys");
