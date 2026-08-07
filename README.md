@@ -91,15 +91,45 @@ Latest Update: 21/8/2025 at 04:08 AM IST (Indian Standard Time)
 Please have patience while waiting for updates. Since I am the only guy working on this project, it does take me time to address all the issues/add in new features.
 
 ---
-# Changelog v1.0.5.2-release+1.21.1
 
-**Important: Earlier proposed second part features will be added in the next patch and this new update marks the end of support for 1.20.6 and below.**
+# AI Player v1.0.6-release+26.2
 
-Thanks to https://github.com/arichornlover AI Player has now been updated to version 1.21.1
+Thanks to both https://github.com/jaymcraft and https://github.com/aricloverEXTRA the mod has been updated for minecraft version `26.2`. All the QoL changes in this version are being backported to the previous versions (1.21.1, 1.21.4 and 1.21.6/1.21.8)
 
-This minor update of AI player updates the mod to version 1.21.1 and also brings support for other custom API providers.
+Linux compatibility issues fix (major bugfixes with world crashes, djl version compatibility issues, etc, sqlite3 problems, etc).
 
-## Custom OpenAI-Compatible Provider Support
+MacOS compatibility issues fix.
+
+A much faster lightweight goal planner for the bot.
+
+A mood and persona system for the bot that's dynamically influenced by player actions and/or world events, which in turn will have an effect on the bot's action.
+
+A dedicated "following" system for the bot which will allow the bot to track and follow the player, allow it to go on expeditions with the player (very experimental, as the moment is not exactly precise due to the bot being a server sided one).
+
+A trading system with the bot, where you can trade your items with the bot (sneak-right-click) and it will trade its own items with you.
+
+An autonomous self goal assignment system for the bot, it gives the bot "quests" to do, so that it automatically moves by itself in the world, and does stuff, like a real player. It will also initiate conversations with you by it's own, or react to world events or player induced world events (like player death or player finding a diamond, etc).
+
+Updated LLM selection screen (`/configMan`)
+
+The NLP bugs have been reduced to 1 in 15 times, and I have planned an updated NLP architecture to finally put the problem to sleep once and for all (will be present in future upgrades).
+
+And also, last but not the least, more bugfixes.
+
+AI-Player no longer requires ollama to be exclusively used and installed, instead it's now compatible with any OpenAI-API compatible provider, including local llm serving tools such as ollama, LM studio, etc.
+
+More natural bot behaviour (such as sleeping at night, better focus on eating food if running low on health/hunger -- this will be learnt over time in training mode).
+
+I unfortunately still don't have a fix for the pathfinding and path tracing issues since this is still a server sided bot and server sided minecraft physics are janky.
+
+
+That's all for this update, the QoL changes in this update are being backported and should be released soon, and I hope I can drop more frequent updates, if I can get a break from life that is.
+
+I might make a youtube video on this update if I get the time.
+
+---
+
+# Custom OpenAI-Compatible Provider Support
 
 This feature allows you to use alternative AI providers that are compatible with the OpenAI API standard, such as OpenRouter, TogetherAI, Perplexity, and others.
 
