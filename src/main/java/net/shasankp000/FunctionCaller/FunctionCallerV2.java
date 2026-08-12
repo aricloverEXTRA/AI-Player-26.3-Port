@@ -1061,7 +1061,7 @@ public class FunctionCallerV2 {
                 String cleanedResponse = cleanJsonString(response);
                 logger.info("Cleaned JSON Response: {}", cleanedResponse);
                 JsonReader reader = new JsonReader(new StringReader(cleanedResponse));
-                reader.setLenient(true);
+                reader.setStrictness(Strictness.LENIENT);
                 JsonObject jsonObject = JsonParser.parseReader(reader).getAsJsonObject();
                 if (jsonObject.has("pipeline")) {
                     AutoFaceEntity.setBotExecutingTask(true);
@@ -1107,7 +1107,7 @@ public class FunctionCallerV2 {
                 String cleanedResponse = cleanJsonString(response);
                 logger.info("Cleaned JSON Response: {}", cleanedResponse);
                 JsonReader reader = new JsonReader(new StringReader(cleanedResponse));
-                reader.setLenient(true);
+                reader.setStrictness(Strictness.LENIENT);
                 JsonObject jsonObject = JsonParser.parseReader(reader).getAsJsonObject();
                 if (jsonObject.has("pipeline")) {
                     AutoFaceEntity.setBotExecutingTask(true);
