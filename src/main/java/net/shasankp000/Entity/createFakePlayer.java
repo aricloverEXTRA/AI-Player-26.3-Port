@@ -32,6 +32,7 @@ import net.minecraft.world.level.portal.TeleportTransition;
 import net.minecraft.world.phys.Vec3;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
+import java.net.URI;
 import java.net.URL;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
@@ -135,7 +136,7 @@ public class createFakePlayer extends ServerPlayer {
     private static CompletableFuture<Optional<GameProfile>> fetchGameProfile(final String name) {
         return CompletableFuture.supplyAsync(() -> {
             try {
-                URL url = new URL("https://api.mojang.com/users/profiles/minecraft/" + name);
+                URL url = URI.create("https://api.mojang.com/users/profiles/minecraft/" + name).toURL();
                 HttpURLConnection connection = (HttpURLConnection) url.openConnection();
                 connection.setRequestMethod("GET");
 

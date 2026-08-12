@@ -5,7 +5,7 @@ import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
 import java.io.InputStream;
-import java.net.URL;
+import java.net.URI;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
@@ -23,7 +23,7 @@ public class NLPModelSetup {
 
         while (retryCount <= MAX_RETRIES) {
             // Download
-            try (InputStream in = new URL(modelURL).openStream()) {
+            try (InputStream in = URI.create(modelURL).toURL().openStream()) {
                 Files.copy(in, targetFile, StandardCopyOption.REPLACE_EXISTING);
             }
 
