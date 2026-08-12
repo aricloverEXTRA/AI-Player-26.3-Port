@@ -181,7 +181,7 @@ public final class NearbyBedSleepController {
                     if (distanceSquared > SEARCH_RADIUS_SQUARED) continue;
 
                     BlockPos pos = origin.offset(dx, dy, dz);
-                    if (level.isOutsideBuildHeight(pos) || !level.hasChunkAt(pos)) continue;
+                    if (level.isOutsideBuildHeight(pos) || !level.hasChunk(pos.getX() >> 4, pos.getZ() >> 4)) continue;
 
                     BlockState state = level.getBlockState(pos);
                     BlockPos footPos = state.getBlock() instanceof BedBlock
@@ -357,7 +357,7 @@ public final class NearbyBedSleepController {
 
     private static boolean validBedCell(ServerLevel level, BlockPos pos) {
         return level.isInsideBuildHeight(pos)
-                && level.hasChunkAt(pos)
+                && level.hasChunk(pos.getX() >> 4, pos.getZ() >> 4)
                 && level.getBlockState(pos).canBeReplaced();
     }
 
