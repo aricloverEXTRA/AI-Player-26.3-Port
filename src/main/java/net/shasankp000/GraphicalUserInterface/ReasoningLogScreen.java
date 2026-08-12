@@ -52,6 +52,6 @@ public class ReasoningLogScreen extends Screen {
 
     @Override
     public void onClose() {
-        Objects.requireNonNull(this.minecraft).gui.setScreen(this.parent);
+        Objects.requireNonNull(this.minecraft).setScreen(this.parent);
     }
 }

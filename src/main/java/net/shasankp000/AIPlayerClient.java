@@ -109,8 +109,8 @@ public class AIPlayerClient implements ClientModInitializer {
 
 
         ClientPlayNetworking.registerGlobalReceiver(OpenConfigPayload.ID, (client, handler) -> {
-            net.minecraft.client.gui.screens.Screen currentScreen = net.minecraft.client.Minecraft.getInstance().gui.screen();
-            net.minecraft.client.Minecraft.getInstance().gui.setScreen(
+            net.minecraft.client.gui.screens.Screen currentScreen = net.minecraft.client.Minecraft.getInstance().screen;
+            net.minecraft.client.Minecraft.getInstance().setScreen(
                     new net.shasankp000.GraphicalUserInterface.ConfigManager(net.minecraft.network.chat.Component.empty(), currentScreen)
             );
         });
@@ -181,7 +181,7 @@ public class AIPlayerClient implements ClientModInitializer {
                                 LLMServiceHandler.runFromChat(combinedContext, finalBotName, finalPlayerUUID, llmClient);
                             } else {
                                 LOGGER.error("LLM client is null for provider: {}", llmProvider);
-                                client.gui.toastManager().addToast(
+                                client.getToastManager().addToast(
                                         new SystemToast(SystemToast.SystemToastId.CHUNK_LOAD_FAILURE,
                                                 Component.nullToEmpty("LLM Client factory error."),
                                                 Component.nullToEmpty("Error! Returned client is null! Cannot proceed!"))
@@ -204,7 +204,7 @@ public class AIPlayerClient implements ClientModInitializer {
                         }
                         default:
                             LOGGER.warn("Unsupported provider detected: {}", llmProvider);
-                            client.gui.toastManager().addToast(
+                            client.getToastManager().addToast(
                                     new SystemToast(SystemToast.SystemToastId.NARRATOR_TOGGLE,
                                             Component.nullToEmpty("Invalid LLM Client."),
                                             Component.nullToEmpty("Set a supported OpenAI-compatible provider."))
@@ -260,7 +260,7 @@ public class AIPlayerClient implements ClientModInitializer {
                             LLMServiceHandler.runFromChat(message, finalBotName, finalPlayerUUID, llmClient);
                         } else {
                             LOGGER.error("Error! Returned client is null! Cannot proceed!");
-                            client.gui.toastManager().addToast(
+                            client.getToastManager().addToast(
                                     new SystemToast(SystemToast.SystemToastId.CHUNK_LOAD_FAILURE,
                                             Component.nullToEmpty("LLM Client factory error."),
                                             Component.nullToEmpty("Error! Returned client is null! Cannot proceed!"))
@@ -283,7 +283,7 @@ public class AIPlayerClient implements ClientModInitializer {
                     }
                     default:
                         LOGGER.warn("Unsupported provider detected: {}", llmProvider);
-                        client.gui.toastManager().addToast(
+                        client.getToastManager().addToast(
                                 new SystemToast(SystemToast.SystemToastId.NARRATOR_TOGGLE,
                                         Component.nullToEmpty("Invalid LLM Client."),
                                         Component.nullToEmpty("Set a supported OpenAI-compatible provider."))

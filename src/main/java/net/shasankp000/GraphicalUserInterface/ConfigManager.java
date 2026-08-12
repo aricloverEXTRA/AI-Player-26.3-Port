@@ -75,14 +75,14 @@ public class ConfigManager extends Screen {
         int totalButtonWidth = buttonSpacing * 5 - 20;
         int buttonsStartX = centerX - totalButtonWidth / 2;
 
-        this.addRenderableWidget(Button.builder(Component.nullToEmpty("API Keys"), (btn) -> Objects.requireNonNull(this.minecraft).gui.setScreen(new APIKeysScreen(Component.nullToEmpty("API Keys"), this))).bounds(buttonsStartX, buttonY, buttonWidth, fieldHeight).build());
-        this.addRenderableWidget(Button.builder(Component.nullToEmpty("Reasoning Log"), (btn) -> Objects.requireNonNull(this.minecraft).gui.setScreen(new ReasoningLogScreen(this))).bounds(buttonsStartX + buttonSpacing, buttonY, buttonWidth, fieldHeight).build());
+        this.addRenderableWidget(Button.builder(Component.nullToEmpty("API Keys"), (btn) -> Objects.requireNonNull(this.minecraft).setScreen(new APIKeysScreen(Component.nullToEmpty("API Keys"), this))).bounds(buttonsStartX, buttonY, buttonWidth, fieldHeight).build());
+        this.addRenderableWidget(Button.builder(Component.nullToEmpty("Reasoning Log"), (btn) -> Objects.requireNonNull(this.minecraft).setScreen(new ReasoningLogScreen(this))).bounds(buttonsStartX + buttonSpacing, buttonY, buttonWidth, fieldHeight).build());
         this.addRenderableWidget(Button.builder(Component.nullToEmpty("Refresh Models"), (btn) -> this.reloadModels()).bounds(buttonsStartX + buttonSpacing * 2, buttonY, buttonWidth, fieldHeight).build());
         
         this.addRenderableWidget(Button.builder(Component.nullToEmpty("Save"), (btn1) -> {
             this.saveToFile();
             if (this.minecraft != null) {
-                this.minecraft.gui.toastManager().addToast(new SystemToast(SystemToast.SystemToastId.NARRATOR_TOGGLE, Component.nullToEmpty("Settings saved!"), Component.nullToEmpty("Saved settings.")));
+                this.minecraft.getToastManager().addToast(new SystemToast(SystemToast.SystemToastId.NARRATOR_TOGGLE, Component.nullToEmpty("Settings saved!"), Component.nullToEmpty("Saved settings.")));
             }
         }).bounds(buttonsStartX + buttonSpacing * 3, buttonY, buttonWidth, fieldHeight).build());
 
@@ -94,14 +94,13 @@ public class ConfigManager extends Screen {
     @Override
     public void extractRenderState(GuiGraphicsExtractor context, int mouseX, int mouseY, float delta) {
         int centerX = this.width / 2;
-        String title = "AI-Player Mod Configuration Menu v1.0.6-release+26.2";
+        String title = "AI-Player Mod Configuration Menu v1.0.6-release+26.1";
         context.text(this.font, title, centerX - (this.font.width(title) / 2), 20, 0xFFFFFFFF, true);
 
         int labelX = searchField.getX();
         context.text(this.font, "Search Models:", labelX, searchField.getY() - 15, 0xFFFFD700, true);
         context.text(this.font, "Select Language Model:", labelX, dropdownMenuWidget.getY() - 15, 0xFFFFD700, true);
 
-        // Shifted an extra 10px down as requested
         int textOffset = dropdownMenuWidget.isExpanded() ? Math.min(filteredModels.size(), 10) * 14 + 20 : 40;
         int infoY = dropdownMenuWidget.getY() + textOffset;
 
@@ -139,7 +138,7 @@ public class ConfigManager extends Screen {
         dropdownMenuWidget.updateOptions(filteredModels);
         
         if (this.minecraft != null) {
-            this.minecraft.gui.toastManager().addToast(new SystemToast(SystemToast.SystemToastId.NARRATOR_TOGGLE, Component.nullToEmpty("Models Reloaded"), Component.nullToEmpty("Found " + allModels.size() + " models")));
+            this.minecraft.getToastManager().addToast(new SystemToast(SystemToast.SystemToastId.NARRATOR_TOGGLE, Component.nullToEmpty("Models Reloaded"), Component.nullToEmpty("Found " + allModels.size() + " models")));
         }
     }
 
@@ -148,7 +147,7 @@ public class ConfigManager extends Screen {
         if (modelName == null || modelName.trim().isEmpty()) {
             LOGGER.warn("No model selected or model name is empty. Skipping save.");
             if (this.minecraft != null) {
-                this.minecraft.gui.toastManager().addToast(new SystemToast(SystemToast.SystemToastId.NARRATOR_TOGGLE, Component.nullToEmpty("Error"), Component.nullToEmpty("Please select a model first!")));
+                this.minecraft.getToastManager().addToast(new SystemToast(SystemToast.SystemToastId.NARRATOR_TOGGLE, Component.nullToEmpty("Error"), Component.nullToEmpty("Please select a model first!")));
             }
             return;
         }
@@ -161,11 +160,11 @@ public class ConfigManager extends Screen {
         // Restored the indicator screen refresh logic
         onClose();
         assert this.minecraft != null;
-        this.minecraft.gui.setScreen(new ConfigManager(Component.empty(), this.parent));
+        this.minecraft.setScreen(new ConfigManager(Component.empty(), this.parent));
     }
 
     @Override
     public void onClose() {
-        if (this.minecraft != null) this.minecraft.gui.setScreen(this.parent);
+        if (this.minecraft != null) this.minecraft.setScreen(this.parent);
     }
 }
