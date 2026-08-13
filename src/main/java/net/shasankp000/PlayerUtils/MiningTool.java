@@ -35,6 +35,8 @@ public class MiningTool {
 
                 // Step 4: Start mining loop
                 ScheduledFuture<?> task = miningExecutor.scheduleAtFixedRate(() -> {
+                    if (FoodConsumptionTool.isConsumptionInProgress(bot.getUuid())) return;
+
                     BlockState currentState = bot.getWorld().getBlockState(targetBlockPos);
 
                     if (currentState.isAir()) {

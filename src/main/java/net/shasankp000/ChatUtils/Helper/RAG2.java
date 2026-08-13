@@ -110,8 +110,17 @@ public class RAG2 {
     }
 
     private static String getBestContextAnswer(String userPrompt, List<Double> queryEmbedding) {
-        String webAnswer = WebSearchTool.search(userPrompt).trim();
-        logger.info("🌐 Web search result: {}", webAnswer);
+        // Only attempt a live web search when the configured provider actually has a key.
+        // Otherwise (e.g. Ollama-only setups) skip it entirely so we never inject a
+        // provider error (like "❌ Gemini API key is missing.") into the LLM context,
+        // which small local models then hallucinate answers from.
+        String webAnswer = "";
+        if (WebSearchTool.isConfigured()) {
+            webAnswer = WebSearchTool.search(userPrompt).trim();
+            logger.info("🌐 Web search result: {}", webAnswer);
+        } else {
+            logger.info("ℹ️ Web search skipped: no search provider key configured.");
+        }
 
         List<SQLiteDB.Memory> localMemories = SQLiteDB.findRelevantMemories(queryEmbedding, "conversation", 1);
         boolean hasLocal = !localMemories.isEmpty();
@@ -122,7 +131,10 @@ public class RAG2 {
 
         // Decide which to trust
         String bestAnswer;
-        if (!webAnswer.isBlank()) {
+        // Treat web-search ERROR results (prefixed with ❌) as "no web result" as well —
+        // never inject them into the LLM context or store them as memories.
+        boolean webUsable = !webAnswer.isBlank() && !webAnswer.startsWith("❌");
+        if (webUsable) {
             if (!webAnswer.equalsIgnoreCase(localAnswer)) {
                 bestAnswer = webAnswer;
                 logger.info("✅ Using web answer, overwriting local DB");
@@ -133,7 +145,7 @@ public class RAG2 {
             }
         } else if (hasLocal && localSimilarity >= 0.8) {
             bestAnswer = localAnswer;
-            logger.info("✅ Using local answer, web empty");
+            logger.info("✅ Using local answer, web empty/errored");
         } else {
             bestAnswer = "❌ No relevant info found.";
             logger.warn("⚠️ Both web and local empty or not confident");

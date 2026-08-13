@@ -18,13 +18,14 @@ public class GoTo {
     public static String goTo(ServerCommandSource botSource, int x, int y, int z, boolean sprint) {
         MinecraftServer server = botSource.getServer();
         ServerPlayerEntity bot = botSource.getPlayer();
-        ServerWorld world = server.getOverworld();
         String botName = botSource.getName();
 
         if (bot == null) {
             System.out.println("Bot not found!");
             return "Bot not found!";
         }
+
+        ServerWorld world = bot.getWorld();
 
         System.out.println("Found bot: " + botSource.getName());
 

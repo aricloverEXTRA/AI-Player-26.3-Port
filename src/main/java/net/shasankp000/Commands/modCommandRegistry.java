@@ -30,6 +30,7 @@ import net.shasankp000.Database.QTableExporter;
 import net.shasankp000.Entity.*;
 import net.shasankp000.FilingSystem.LLMClientFactory;
 import net.shasankp000.GameAI.BotEventHandler;
+import net.shasankp000.GameAI.autonomous.AutonomousManager;
 import net.shasankp000.OllamaClient.ollamaClient;
 import net.shasankp000.PathFinding.BotStance;
 import net.shasankp000.PathFinding.ChartPathToBlock;
@@ -1158,6 +1159,8 @@ public class modCommandRegistry {
 
             if (bot!=null) {
 
+                BotEventHandler.setActiveBot(server, bot);
+
                 Objects.requireNonNull(bot.getAttributeInstance(EntityAttributes.KNOCKBACK_RESISTANCE)).setBaseValue(0.0);
 
                 RespawnHandler.registerRespawnListener(bot);
@@ -1190,6 +1193,10 @@ public class modCommandRegistry {
             System.out.println("Preparing for connection to language model....");
 
             if (bot!=null) {
+
+                final String spawnedBotName = bot.getName().getString();
+
+                BotEventHandler.setActiveBot(server, bot);
 
                 Objects.requireNonNull(bot.getAttributeInstance(EntityAttributes.KNOCKBACK_RESISTANCE)).setBaseValue(0.0);
 
@@ -1236,8 +1243,16 @@ public class modCommandRegistry {
                                 }
                             }
 
-                            LOGGER.info("LLM Service Handler initialized! Starting AutoFace...");
-                            AutoFaceEntity.startAutoFace(bot);
+                            LOGGER.info("LLM Service Handler initialized! Starting autonomous systems for '{}'...", spawnedBotName);
+                            server.execute(() -> {
+                                ServerPlayerEntity activeBot = server.getPlayerManager().getPlayer(spawnedBotName);
+                                if (activeBot == null) {
+                                    LOGGER.warn("Bot '{}' despawned before autonomous systems could start", spawnedBotName);
+                                    return;
+                                }
+                                AutonomousManager.getInstance().startBot(spawnedBotName, activeBot.getUuid());
+                                AutoFaceEntity.startAutoFace(activeBot);
+                            });
 
                             Thread.currentThread().interrupt();
 

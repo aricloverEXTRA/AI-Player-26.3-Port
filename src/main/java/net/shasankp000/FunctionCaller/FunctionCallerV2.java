@@ -52,6 +52,7 @@ import net.shasankp000.ChatUtils.ChatUtils;
 import net.shasankp000.Entity.EntityDetails;
 
 import net.shasankp000.GameAI.BotEventHandler;
+import net.shasankp000.PlayerUtils.FoodConsumptionTool;
 
 import net.shasankp000.GameAI.State;
 
@@ -561,6 +562,51 @@ public class FunctionCallerV2 {
         private static void getHealthLevel() {
             System.out.println("Getting health level...");
             getFunctionOutput("Remaining hearts: " + getHealth.getBotHealthLevel(Objects.requireNonNull(botSource.getPlayer())));
+        }
+
+        /** equipArmor: equip the best armor available in inventory **/
+        private static void equipArmor() {
+            if (botSource == null || botSource.getPlayer() == null) {
+                getFunctionOutput("Bot not found.");
+                return;
+            }
+
+            ServerPlayerEntity bot = botSource.getPlayer();
+            MinecraftServer server = botSource.getServer();
+            CompletableFuture<Integer> equippedCountFuture = new CompletableFuture<>();
+            Runnable equipAction = () -> {
+                try {
+                    armorUtils.autoEquipArmor(bot);
+                    int equippedCount = 0;
+                    for (var slot : new net.minecraft.entity.EquipmentSlot[]{
+                            net.minecraft.entity.EquipmentSlot.HEAD,
+                            net.minecraft.entity.EquipmentSlot.CHEST,
+                            net.minecraft.entity.EquipmentSlot.LEGS,
+                            net.minecraft.entity.EquipmentSlot.FEET}) {
+                        if (!bot.getEquippedStack(slot).isEmpty()) equippedCount++;
+                    }
+                    equippedCountFuture.complete(equippedCount);
+                } catch (Exception e) {
+                    equippedCountFuture.completeExceptionally(e);
+                }
+            };
+
+            try {
+                if (server.isOnThread()) {
+                    equipAction.run();
+                } else {
+                    server.execute(equipAction);
+                }
+                int equippedCount = equippedCountFuture.get(5, TimeUnit.SECONDS);
+                if (equippedCount > 0) {
+                    getFunctionOutput("Equipped best available armor; " + equippedCount + " armor piece(s) equipped.");
+                } else {
+                    getFunctionOutput("No armor was available to equip.");
+                }
+            } catch (Exception e) {
+                logger.error("Failed to equip armor", e);
+                getFunctionOutput("Failed to equip armor: " + e.getMessage());
+            }
         }
 
         private static void webSearch(String query) {
@@ -1755,6 +1801,10 @@ public class FunctionCallerV2 {
                     logger.info("Calling method: getHealthLevel");
                     Tools.getHealthLevel();
                 }
+                case "equipArmor" -> {
+                    logger.info("Calling method: equipArmor");
+                    Tools.equipArmor();
+                }
                 case "updateState" -> {
                     String keysRaw = paramMap.get("keys");
                     String valuesRaw = paramMap.get("values");
@@ -1858,6 +1908,9 @@ public class FunctionCallerV2 {
             final int stepIndex = i;
 
             sequentialExecution = sequentialExecution.thenCompose(_void -> {
+                // Hunger maintenance may suspend a busy plan between atomic
+                // actions. Continue this exact plan after eating completes.
+                FoodConsumptionTool.awaitResume(botSource.getPlayer());
                 // Get state BEFORE action
                 State stateBefore = initialState; // TODO: Could update this per step
 
