@@ -109,18 +109,8 @@ public class RAG2 {
         }
     }
 
-    private static String getBestContextAnswer(String userPrompt, List<Double> queryEmbedding) {
-        // Only attempt a live web search when the configured provider actually has a key.
-        // Otherwise (e.g. Ollama-only setups) skip it entirely so we never inject a
-        // provider error (like "❌ Gemini API key is missing.") into the LLM context,
-        // which small local models then hallucinate answers from.
-        String webAnswer = "";
-        if (WebSearchTool.isConfigured()) {
-            webAnswer = WebSearchTool.search(userPrompt).trim();
-            logger.info("🌐 Web search result: {}", webAnswer);
-        } else {
-            logger.info("ℹ️ Web search skipped: no search provider key configured.");
-        }
+    private static String getBestContextAnswer(String userPrompt, List<Double> queryEmbedding) {        String webAnswer = WebSearchTool.search(userPrompt).trim();
+        logger.info("🌐 Web search result: {}", webAnswer);
 
         List<SQLiteDB.Memory> localMemories = SQLiteDB.findRelevantMemories(queryEmbedding, "conversation", 1);
         boolean hasLocal = !localMemories.isEmpty();
@@ -129,10 +119,7 @@ public class RAG2 {
 
         logger.info("🔍 Local similarity: {}", localSimilarity);
 
-        // Decide which to trust
         String bestAnswer;
-        // Treat web-search ERROR results (prefixed with ❌) as "no web result" as well —
-        // never inject them into the LLM context or store them as memories.
         boolean webUsable = !webAnswer.isBlank() && !webAnswer.startsWith("❌");
         if (webUsable) {
             if (!webAnswer.equalsIgnoreCase(localAnswer)) {

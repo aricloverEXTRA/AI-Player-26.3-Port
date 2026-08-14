@@ -47,7 +47,8 @@ public class WebSearchTool {
     public static String search(String query) {
         String cleanQuery = query.trim();
         String generatedQuery = createQuery(cleanQuery);
-        String cacheKey = hash(generatedQuery + AISearchConfig.PREFERRED_PROVIDER);
+        String provider = effectiveSearchProvider();
+        String cacheKey = hash(generatedQuery + provider);
         String cached = getCached(cacheKey);
         if (cached != null) {
             logger.info("✅ Using cached search result for: {}", cleanQuery);
@@ -55,7 +56,7 @@ public class WebSearchTool {
         }
 
         String result;
-        switch (AISearchConfig.PREFERRED_PROVIDER.toLowerCase()) {
+        switch (provider) {
             case "gemini" -> result = geminiSearch(cleanQuery);
             case "serper" -> result = serperSearch(cleanQuery);
             default -> result = "❌ No search provider configured.";
@@ -68,6 +69,14 @@ public class WebSearchTool {
         }
 
         return result;
+    }
+
+    private static String effectiveSearchProvider() {
+        String configured = AISearchConfig.PREFERRED_PROVIDER.toLowerCase();
+        if ("ollama".equalsIgnoreCase(llmMode) && "gemini".equals(configured)) {
+            return "serper";
+        }
+        return configured;
     }
 
     private static String geminiSearch(String query) {

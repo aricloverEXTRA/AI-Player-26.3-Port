@@ -994,6 +994,12 @@ public class FunctionCallerV2 {
             response = thinkingResponse.getContent();
             logger.info("Raw LLM Response: {}", response);
             String cleanedResponse = stripThinkBlock(response);
+            if (!containsJsonSyntax(cleanedResponse)) {
+                if (!isContinueToken(cleanedResponse)) {
+                    sendMessageToPlayer(cleanedResponse);
+                }
+                return;
+            }
             String jsonPart = extractJson(cleanedResponse);
             logger.info("Extracted JSON: {}", jsonPart);
             executeFunction(userPrompt, jsonPart);
@@ -1019,6 +1025,12 @@ public class FunctionCallerV2 {
             response = client.sendPrompt(fullSystemPrompt, userPrompt);
             logger.info("Raw LLM Response: {}", response);
             String cleanedResponse = stripThinkBlock(response);
+            if (!containsJsonSyntax(cleanedResponse)) {
+                if (!isContinueToken(cleanedResponse)) {
+                    sendMessageToPlayer(cleanedResponse);
+                }
+                return;
+            }
             String jsonPart = extractJson(cleanedResponse);
             logger.info("Extracted JSON: {}", jsonPart);
             executeFunction(userPrompt, jsonPart, client);
@@ -1188,6 +1200,24 @@ public class FunctionCallerV2 {
 
     private static void sendMessageToPlayer(String message) {
         processLLMOutput(message, botSource.getName(), botSource);
+    }
+
+    private static boolean containsJsonSyntax(String text) {
+        return text.contains("{") || text.contains("[");
+    }
+
+    private static boolean isContinueToken(String text) {
+        // The function-caller prompt teaches the model a '✅ Continue' no-op
+        // marker. It is an internal control signal, never something to say.
+        String normalized = text.replace("✅", "").replace("✔", "")
+                .replaceAll("\\s+", " ")
+                .replaceAll("[.!?]+$", "")
+                .trim().toLowerCase();
+        if (normalized.isEmpty()) return true;
+        for (String token : normalized.split(" ")) {
+            if (!token.equals("continue")) return false;
+        }
+        return true;
     }
 
     private static void runPipelineLoop(JsonArray pipeline) {
@@ -1706,8 +1736,8 @@ public class FunctionCallerV2 {
             String key = value.substring(1);
             Object resolvedObj = SharedStateUtils.getValue(state, key);
             if (resolvedObj == null) {
-                logger.warn("⚠️ Placeholder '{}' not found in sharedState. Using fallback value '0'", key);
-                return "0";
+                logger.warn("⚠️ Placeholder '{}' not found in sharedState; marking parameter as unresolved.", key);
+                return "__UNRESOLVED__";
             }
             String resolved = resolvedObj.toString();
             logger.debug("🔁 Resolved placeholder {} → {}", key, resolved);
@@ -1726,6 +1756,13 @@ public class FunctionCallerV2 {
     private static CompletableFuture<Void> callFunction(String functionName, Map<String, String> paramMap, Map<String, Object> state) {
         return CompletableFuture.runAsync(() -> {
             logger.info("🔧 callFunction: {} with params: {}", functionName, paramMap);
+
+            boolean hasUnresolved = paramMap.values().stream()
+                    .anyMatch(v -> "__UNRESOLVED__".equals(resolvePlaceholder(v, state)));
+            if (hasUnresolved) {
+                logger.warn("⚠️ Cannot execute {}: one or more parameters are unresolved placeholders.", functionName);
+                return;
+            }
 
             switch (functionName) {
                 case "goTo" -> {
