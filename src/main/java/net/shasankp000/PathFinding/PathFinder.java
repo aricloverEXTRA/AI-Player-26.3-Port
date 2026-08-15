@@ -3,9 +3,6 @@ package net.shasankp000.PathFinding;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
 import net.minecraft.server.level.ServerLevel;
-import net.minecraft.tags.FluidTags;
-import net.minecraft.world.level.block.Blocks;
-import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.phys.AABB;
 import net.minecraft.world.phys.Vec3;
 import net.minecraft.world.phys.shapes.VoxelShape;
@@ -21,7 +18,9 @@ public final class PathFinder {
     private static final double HEIGHT = 1.79;
     private static final double EPSILON = 1.0E-4;
     private static final int MAX_EXPANSIONS = 100_000;
-    private static final int[][] HORIZONTAL = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+    private static final int[][] CARDINAL = {{1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+    private static final int[][] DIAGONAL = {{1, 1}, {1, -1}, {-1, 1}, {-1, -1}};
+    private static final double SQRT_TWO = Math.sqrt(2.0);
 
     private PathFinder() {}
 
@@ -82,43 +81,55 @@ public final class PathFinder {
 
     /** Stateful search so callers can budget expansions over server ticks. */
     public static final class Search {
-        private final ServerLevel world;
+        private final NavigationWorldView world;
         private final PriorityQueue<SearchNode> open = new PriorityQueue<>();
-        private final Map<NavKey, SearchNode> openByKey = new HashMap<>();
+        private final Map<NavKey, Double> bestOpenG = new HashMap<>();
         private final Set<NavKey> closed = new HashSet<>();
         private final Vec3 requestedGoal;
         private final Vec3 effectiveGoal;
         private final Set<BlockPos> penalizedTargets;
+        private final GoalDisposition disposition;
         private SearchStatus status = SearchStatus.SEARCHING;
         private List<PathNode> result = List.of();
         private int expansions;
 
-        private Search(ServerLevel world, Vec3 startPosition, BlockPos goal, int horizon,
+        private Search(NavigationWorldView world, Vec3 startPosition, BlockPos goal, int horizon,
                        Set<BlockPos> penalizedTargets) {
             this.world = world;
             this.penalizedTargets = Set.copyOf(penalizedTargets);
             this.requestedGoal = Vec3.atBottomCenterOf(goal);
-            Vec3 localGoal = capToLoadedHorizon(world, startPosition, requestedGoal, horizon);
+            HorizonTarget horizonTarget = capToLoadedHorizon(world, startPosition, requestedGoal, horizon);
+            Vec3 localGoal = horizonTarget.target();
             Optional<SearchNode> start = normalizeStart(world, startPosition);
-            Optional<SearchNode> normalizedGoal = normalizeGoal(world, BlockPos.containing(localGoal));
+            Optional<NormalizedGoal> normalizedGoal = normalizeGoal(world, BlockPos.containing(localGoal));
             if (start.isEmpty() || normalizedGoal.isEmpty()) {
                 status = SearchStatus.INVALID_GOAL;
                 effectiveGoal = localGoal;
+                disposition = horizonTarget.capped() ? GoalDisposition.HORIZON_FRONTIER : GoalDisposition.EXACT;
                 return;
             }
-            effectiveGoal = normalizedGoal.get().target;
+            effectiveGoal = normalizedGoal.get().node().target;
+            disposition = horizonTarget.capped() ? GoalDisposition.HORIZON_FRONTIER
+                    : normalizedGoal.get().normalized() ? GoalDisposition.NORMALIZED_FINAL : GoalDisposition.EXACT;
             SearchNode first = start.get();
             SearchNode seeded = new SearchNode(first.key, first.target, MovementType.START, null, 0,
                     heuristic(first.target, effectiveGoal));
             open.add(seeded);
-            openByKey.put(seeded.key, seeded);
+            bestOpenG.put(seeded.key, seeded.g);
         }
 
         public SearchStatus advance(int budget) {
+            return advance(budget, Long.MAX_VALUE);
+        }
+
+        SearchStatus advance(int budget, long deadlineNanos) {
             if (status != SearchStatus.SEARCHING) return status;
-            for (int i = 0; i < budget && !open.isEmpty() && expansions < MAX_EXPANSIONS; i++, expansions++) {
+            for (int i = 0; i < budget && !open.isEmpty() && expansions < MAX_EXPANSIONS
+                    && System.nanoTime() < deadlineNanos; i++, expansions++) {
                 SearchNode current = open.poll();
-                if (!openByKey.remove(current.key, current) || !closed.add(current.key)) continue;
+                Double best = bestOpenG.get(current.key);
+                if (isStaleQueueEntry(current.g, best) || !closed.add(current.key)) continue;
+                bestOpenG.remove(current.key);
                 if (horizontalDistance(current.target, effectiveGoal) <= 0.51
                         && Math.abs(current.target.y - effectiveGoal.y) <= 0.76) {
                     result = smooth(reconstruct(current), world);
@@ -131,11 +142,10 @@ public final class PathFinder {
                             unpenalized.parent, unpenalized.g + 8.0, unpenalized.h)
                             : unpenalized;
                     if (closed.contains(next.key)) continue;
-                    SearchNode existing = openByKey.get(next.key);
-                    if (existing == null || next.g < existing.g) {
-                        if (existing != null) open.remove(existing);
+                    Double existing = bestOpenG.get(next.key);
+                    if (existing == null || next.g + EPSILON < existing) {
                         open.add(next);
-                        openByKey.put(next.key, next);
+                        bestOpenG.put(next.key, next.g);
                     }
                 }
             }
@@ -146,14 +156,26 @@ public final class PathFinder {
         public List<PathNode> result() { return result; }
         public Vec3 requestedGoal() { return requestedGoal; }
         public Vec3 effectiveGoal() { return effectiveGoal; }
-        public boolean isPartial() { return horizontalDistance(effectiveGoal, requestedGoal) > 2.0; }
+        public GoalDisposition disposition() { return disposition; }
+        public int expansions() { return expansions; }
+        public int openSize() { return open.size(); }
+        public int closedSize() { return closed.size(); }
+    }
+
+    static boolean isStaleQueueEntry(double queuedCost, Double bestKnownCost) {
+        return bestKnownCost == null || queuedCost > bestKnownCost + EPSILON;
     }
 
     public static Search beginSearch(ServerLevel world, Vec3 start, BlockPos goal, int horizon) {
-        return new Search(world, start, goal, horizon, Set.of());
+        return new Search(NavigationWorldView.live(world), start, goal, horizon, Set.of());
     }
 
     public static Search beginSearch(ServerLevel world, Vec3 start, BlockPos goal, int horizon,
+                                     Set<BlockPos> penalizedTargets) {
+        return new Search(NavigationWorldView.live(world), start, goal, horizon, penalizedTargets);
+    }
+
+    public static Search beginSearch(NavigationWorldView world, Vec3 start, BlockPos goal, int horizon,
                                      Set<BlockPos> penalizedTargets) {
         return new Search(world, start, goal, horizon, penalizedTargets);
     }
@@ -166,7 +188,7 @@ public final class PathFinder {
     }
 
     public static List<PathNode> simplifyPath(List<PathNode> path, ServerLevel world) {
-        return smooth(path, world);
+        return smooth(path, NavigationWorldView.live(world));
     }
 
     public static Queue<Segment> convertPathToSegments(List<PathNode> path, boolean sprint) {
@@ -180,17 +202,18 @@ public final class PathFinder {
     }
 
     public static boolean isWaypointStillValid(ServerLevel world, PathNode node) {
-        if (node.movement().targetIsWater()) return isWaterCell(world, BlockPos.containing(node.target()));
-        return bodyClear(world, node.target()) && hasSupportAt(world, node.target());
+        NavigationWorldView view = NavigationWorldView.live(world);
+        if (node.movement().targetIsWater()) return isWaterCell(view, BlockPos.containing(node.target()));
+        return bodyClear(view, node.target()) && hasSupportAt(view, node.target());
     }
 
-    private static List<SearchNode> successors(ServerLevel world, SearchNode current, Vec3 goal) {
-        List<SearchNode> out = new ArrayList<>(8);
+    private static List<SearchNode> successors(NavigationWorldView world, SearchNode current, Vec3 goal) {
+        List<SearchNode> out = new ArrayList<>(12);
         if (current.key.water) addVerticalWaterSuccessors(world, current, goal, out);
-        for (int[] direction : HORIZONTAL) {
+        for (int[] direction : CARDINAL) {
             int x = current.key.x + direction[0];
             int z = current.key.z + direction[1];
-            SearchNode ground = bestGroundSuccessor(world, current, x, z, goal);
+            SearchNode ground = bestGroundSuccessor(world, current, x, z, goal, false, direction[0], direction[1]);
             if (ground != null) out.add(ground);
             int waterY = (int) Math.floor(current.target.y);
             for (int candidateY : new int[]{waterY, waterY - 1}) {
@@ -205,10 +228,19 @@ public final class PathFinder {
                 }
             }
         }
+        if (!current.key.water) {
+            for (int[] direction : DIAGONAL) {
+                SearchNode diagonal = bestGroundSuccessor(world, current,
+                        current.key.x + direction[0], current.key.z + direction[1], goal,
+                        true, direction[0], direction[1]);
+                if (diagonal != null) out.add(diagonal);
+            }
+        }
         return out;
     }
 
-    private static SearchNode bestGroundSuccessor(ServerLevel world, SearchNode current, int x, int z, Vec3 goal) {
+    private static SearchNode bestGroundSuccessor(NavigationWorldView world, SearchNode current, int x, int z,
+                                                   Vec3 goal, boolean diagonal, int dx, int dz) {
         int baseSupportY = current.key.water ? (int) Math.floor(current.target.y) : current.key.y;
         for (int supportY = baseSupportY + 1; supportY >= baseSupportY - 3; supportY--) {
             Optional<Vec3> landing = groundTarget(world, new BlockPos(x, supportY, z));
@@ -222,18 +254,35 @@ public final class PathFinder {
             else if (rise >= -0.61) type = MovementType.WALK;
             else if (rise >= -3.01) type = MovementType.DROP;
             else continue;
+            if (diagonal && type != MovementType.WALK && type != MovementType.DROP) continue;
+            if (diagonal && !diagonalCornersClear(world, current, target, type, dx, dz, goal)) continue;
             // For adjacent walk/step edges, collision-safe endpoints are sufficient: the
             // swept volume is the union of the two neighboring player boxes. Re-running
             // the thin support probe here caused exact block-top positions to be rejected.
             if (type != MovementType.WALK && type != MovementType.STEP_UP
                     && !transitionClear(world, current.target, target, type)) continue;
-            double cost = movementCost(type) + Math.max(0, -rise) * 0.35 + clearancePenalty(world, target);
+            double lengthCost = diagonal ? SQRT_TWO : 1.0;
+            double cost = movementCost(type) * lengthCost
+                    + Math.max(0, -rise) * 0.35 + clearancePenalty(world, target)
+                    + hazardProximityPenalty(world, target);
             return node(current, keyForGround(x, supportY, z), target, type, goal, cost);
         }
         return null;
     }
 
-    private static void addVerticalWaterSuccessors(ServerLevel world, SearchNode current, Vec3 goal, List<SearchNode> out) {
+    private static boolean diagonalCornersClear(NavigationWorldView world, SearchNode current, Vec3 target,
+                                                MovementType type, int dx, int dz, Vec3 goal) {
+        SearchNode first = bestGroundSuccessor(world, current, current.key.x + dx, current.key.z,
+                goal, false, dx, 0);
+        SearchNode second = bestGroundSuccessor(world, current, current.key.x, current.key.z + dz,
+                goal, false, 0, dz);
+        if (first == null || second == null) return false;
+        if (first.movement != type || second.movement != type) return false;
+        if (Math.abs(first.target.y - target.y) > 0.1 || Math.abs(second.target.y - target.y) > 0.1) return false;
+        return transitionClear(world, current.target, target, type);
+    }
+
+    private static void addVerticalWaterSuccessors(NavigationWorldView world, SearchNode current, Vec3 goal, List<SearchNode> out) {
         for (int dy : new int[]{1, -1}) {
             BlockPos pos = new BlockPos(current.key.x, current.key.y + dy, current.key.z);
             if (isWaterCell(world, pos)) {
@@ -248,7 +297,7 @@ public final class PathFinder {
         return new SearchNode(key, target, type, parent, parent.g + edgeCost, heuristic(target, goal));
     }
 
-    private static Optional<SearchNode> normalizeStart(ServerLevel world, Vec3 position) {
+    private static Optional<SearchNode> normalizeStart(NavigationWorldView world, Vec3 position) {
         BlockPos feet = BlockPos.containing(position);
         if (isWaterCell(world, feet)) {
             return Optional.of(new SearchNode(keyForWater(feet), Vec3.atCenterOf(feet), MovementType.START, null, 0, 0));
@@ -264,7 +313,9 @@ public final class PathFinder {
         return Optional.empty();
     }
 
-    private static Optional<SearchNode> normalizeGoal(ServerLevel world, BlockPos requested) {
+    private record NormalizedGoal(SearchNode node, boolean normalized) {}
+
+    private static Optional<NormalizedGoal> normalizeGoal(NavigationWorldView world, BlockPos requested) {
         List<BlockPos> candidates = new ArrayList<>();
         for (int radius = 0; radius <= 2; radius++) {
             for (int dy = -2; dy <= 2; dy++) {
@@ -278,23 +329,27 @@ public final class PathFinder {
         candidates.sort(Comparator.comparingDouble(p -> p.distSqr(requested)));
         for (BlockPos feet : candidates) {
             if (isWaterCell(world, feet)) {
-                return Optional.of(new SearchNode(keyForWater(feet), Vec3.atCenterOf(feet), MovementType.SWIM, null, 0, 0));
+                SearchNode node = new SearchNode(keyForWater(feet), Vec3.atCenterOf(feet), MovementType.SWIM, null, 0, 0);
+                return Optional.of(new NormalizedGoal(node, !feet.equals(requested)));
             }
             for (int supportY : new int[]{feet.getY() - 1, feet.getY()}) {
                 BlockPos support = new BlockPos(feet.getX(), supportY, feet.getZ());
                 Optional<Vec3> target = groundTarget(world, support);
                 if (target.isPresent()) {
-                    return Optional.of(new SearchNode(keyForGround(support.getX(), support.getY(), support.getZ()),
-                            target.get(), MovementType.WALK, null, 0, 0));
+                    SearchNode node = new SearchNode(keyForGround(support.getX(), support.getY(), support.getZ()),
+                            target.get(), MovementType.WALK, null, 0, 0);
+                    Vec3 requestedTarget = Vec3.atBottomCenterOf(requested);
+                    boolean normalized = !feet.equals(requested) || target.get().distanceTo(requestedTarget) > 0.1;
+                    return Optional.of(new NormalizedGoal(node, normalized));
                 }
             }
         }
         return Optional.empty();
     }
 
-    private static Optional<Vec3> groundTarget(ServerLevel world, BlockPos support) {
+    private static Optional<Vec3> groundTarget(NavigationWorldView world, BlockPos support) {
         if (!world.isLoaded(support) || isHazard(world, support)) return Optional.empty();
-        VoxelShape shape = world.getBlockState(support).getCollisionShape(world, support);
+        VoxelShape shape = world.collisionShape(support);
         if (shape.isEmpty()) return Optional.empty();
         double top = shape.max(Direction.Axis.Y);
         if (top < 0.25 || top > 1.0 + EPSILON) return Optional.empty();
@@ -304,19 +359,19 @@ public final class PathFinder {
         return bodyClear(world, target) ? Optional.of(target) : Optional.empty();
     }
 
-    private static boolean bodyClear(ServerLevel world, Vec3 feet) {
+    private static boolean bodyClear(NavigationWorldView world, Vec3 feet) {
         BlockPos pos = BlockPos.containing(feet);
         return world.isLoaded(pos) && world.isLoaded(pos.above())
-                && world.noBlockCollision(null, playerBox(feet), false);
+                && world.noBlockCollision(playerBox(feet));
     }
 
-    private static boolean hasSupportAt(ServerLevel world, Vec3 feet) {
+    private static boolean hasSupportAt(NavigationWorldView world, Vec3 feet) {
         int blockX = (int) Math.floor(feet.x);
         int blockY = (int) Math.floor(feet.y - EPSILON);
         int blockZ = (int) Math.floor(feet.z);
         BlockPos support = new BlockPos(blockX, blockY, blockZ);
         if (!world.isLoaded(support)) return false;
-        VoxelShape shape = world.getBlockState(support).getCollisionShape(world, support);
+        VoxelShape shape = world.collisionShape(support);
         if (shape.isEmpty()) return false;
         return collisionBoxesSupport(shape.toAabbs(), feet.x - blockX, feet.z - blockZ,
                 feet.y - blockY);
@@ -331,7 +386,7 @@ public final class PathFinder {
         return false;
     }
 
-    private static boolean transitionClear(ServerLevel world, Vec3 from, Vec3 to, MovementType type) {
+    private static boolean transitionClear(NavigationWorldView world, Vec3 from, Vec3 to, MovementType type) {
         int samples = Math.max(2, (int) Math.ceil(from.distanceTo(to) * 4));
         for (int i = 1; i <= samples; i++) {
             double t = i / (double) samples;
@@ -367,34 +422,43 @@ public final class PathFinder {
         return apex + (toY - apex) * ((t - 0.65) / 0.35);
     }
 
-    private static boolean isWaterCell(ServerLevel world, BlockPos pos) {
+    private static boolean isWaterCell(NavigationWorldView world, BlockPos pos) {
         return world.isLoaded(pos) && isWater(world, pos) && !isHazard(world, pos)
-                && world.noBlockCollision(null, playerBox(Vec3.atCenterOf(pos)), false);
+                && world.noBlockCollision(playerBox(Vec3.atCenterOf(pos)));
     }
 
-    private static boolean isWater(ServerLevel world, BlockPos pos) {
-        return world.getFluidState(pos).is(FluidTags.WATER);
+    private static boolean isWater(NavigationWorldView world, BlockPos pos) {
+        return world.isWater(pos);
     }
 
-    private static boolean isHazard(ServerLevel world, BlockPos pos) {
-        BlockState state = world.getBlockState(pos);
-        return state.is(Blocks.LAVA) || state.is(Blocks.FIRE) || state.is(Blocks.SOUL_FIRE)
-                || state.is(Blocks.CACTUS) || state.is(Blocks.MAGMA_BLOCK)
-                || state.is(Blocks.SWEET_BERRY_BUSH) || state.is(Blocks.POWDER_SNOW)
-                || world.getFluidState(pos).is(FluidTags.LAVA);
+    private static boolean isHazard(NavigationWorldView world, BlockPos pos) {
+        return world.isHazard(pos);
     }
 
-    private static double clearancePenalty(ServerLevel world, Vec3 target) {
+    private static double clearancePenalty(NavigationWorldView world, Vec3 target) {
         int blocked = 0;
         BlockPos feet = BlockPos.containing(target);
-        for (int[] direction : HORIZONTAL) {
+        for (int[] direction : CARDINAL) {
             BlockPos side = feet.offset(direction[0], 0, direction[1]);
-            if (!world.isLoaded(side) || !world.getBlockState(side).getCollisionShape(world, side).isEmpty()) blocked++;
+            if (!world.isLoaded(side) || !world.collisionShape(side).isEmpty()) blocked++;
         }
         return blocked * 0.12;
     }
 
-    private static double movementCost(MovementType type) {
+    private static double hazardProximityPenalty(NavigationWorldView world, Vec3 target) {
+        BlockPos feet = BlockPos.containing(target);
+        double penalty = 0.0;
+        for (int dx = -1; dx <= 1; dx++) {
+            for (int dz = -1; dz <= 1; dz++) {
+                if (dx == 0 && dz == 0) continue;
+                if (world.isHazard(feet.offset(dx, 0, dz))
+                        || world.isHazard(feet.offset(dx, -1, dz))) penalty += 1.5;
+            }
+        }
+        return penalty;
+    }
+
+    static double movementCost(MovementType type) {
         return switch (type) {
             case WALK -> 1.0;
             case STEP_UP -> 1.15;
@@ -414,7 +478,7 @@ public final class PathFinder {
         return path;
     }
 
-    private static List<PathNode> smooth(List<PathNode> path, ServerLevel world) {
+    private static List<PathNode> smooth(List<PathNode> path, NavigationWorldView world) {
         if (path.size() < 3) return List.copyOf(path);
         List<PathNode> smoothed = new ArrayList<>();
         int anchor = 0;
@@ -446,12 +510,19 @@ public final class PathFinder {
 
     private static NavKey keyForGround(int x, int supportY, int z) { return new NavKey(x, supportY, z, false); }
     private static NavKey keyForWater(BlockPos pos) { return new NavKey(pos.getX(), pos.getY(), pos.getZ(), true); }
-    private static double heuristic(Vec3 a, Vec3 b) { return horizontalDistance(a, b) + Math.abs(a.y - b.y) * 0.75; }
+    static double heuristic(Vec3 a, Vec3 b) {
+        double dx = Math.abs(a.x - b.x);
+        double dz = Math.abs(a.z - b.z);
+        double octile = Math.max(dx, dz) + (SQRT_TWO - 1.0) * Math.min(dx, dz);
+        return octile + Math.abs(a.y - b.y) * 0.75;
+    }
     private static double horizontalDistance(Vec3 a, Vec3 b) { return Math.hypot(a.x - b.x, a.z - b.z); }
 
-    private static Vec3 capToLoadedHorizon(ServerLevel world, Vec3 start, Vec3 goal, int horizon) {
+    private record HorizonTarget(Vec3 target, boolean capped) {}
+
+    private static HorizonTarget capToLoadedHorizon(NavigationWorldView world, Vec3 start, Vec3 goal, int horizon) {
         double distance = horizontalDistance(start, goal);
-        if (distance <= horizon && world.isLoaded(BlockPos.containing(goal))) return goal;
+        if (distance <= horizon && world.isLoaded(BlockPos.containing(goal))) return new HorizonTarget(goal, false);
         double scale = Math.min(1.0, horizon / Math.max(distance, 1.0E-6));
         Vec3 candidate = new Vec3(start.x + (goal.x - start.x) * scale,
                 start.y + Math.max(-2, Math.min(2, goal.y - start.y)),
@@ -461,6 +532,6 @@ public final class PathFinder {
                 && !world.isLoaded(BlockPos.containing(candidate))) {
             candidate = candidate.add(directionBack);
         }
-        return candidate;
+        return new HorizonTarget(candidate, true);
     }
 }

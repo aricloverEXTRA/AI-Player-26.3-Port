@@ -29,6 +29,7 @@ import net.shasankp000.GameAI.persona.PersonaRegistry;
 import net.shasankp000.GameAI.autonomous.NearbyBedSleepController;
 import net.shasankp000.PathFinding.NavigationOptions;
 import net.shasankp000.PathFinding.NavigationService;
+import net.shasankp000.PathFinding.SuspensionReason;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -1002,11 +1003,13 @@ public class BotEventHandler {
         switch (action) {
             case "moveForward":
                 System.out.println("Performing action: move forward");
+                NavigationService.suspend(bot.getUUID(), SuspensionReason.MANUAL_OVERRIDE);
                 server.getCommands().performPrefixedCommand(botSource, "/player " + botName + " move forward");
                 AutoFaceEntity.isBotMoving = true;
                 break;
             case "moveBackward":
                 System.out.println("Performing action: move backward");
+                NavigationService.suspend(bot.getUUID(), SuspensionReason.MANUAL_OVERRIDE);
                 server.getCommands().performPrefixedCommand(botSource, "/player " + botName + " move backward");
                 AutoFaceEntity.isBotMoving = true;
                 break;
@@ -1041,6 +1044,7 @@ public class BotEventHandler {
             case "stopMoving":
                 System.out.println("Performing action: stop moving");
                 server.getCommands().performPrefixedCommand(botSource, "/player " + botName + " stop");
+                NavigationService.resume(bot.getUUID(), SuspensionReason.MANUAL_OVERRIDE);
                 AutoFaceEntity.isBotMoving = false;
                 break;
             case "useItem":
@@ -1306,7 +1310,8 @@ public class BotEventHandler {
                             (int) Math.floor(targetVec.z)
                           );
 
-                          NavigationService.navigate(bot, targetPos, NavigationOptions.of(true))
+                          NavigationService.navigateOverride(bot, targetPos, NavigationOptions.of(true),
+                                  SuspensionReason.COMBAT)
                             .thenAccept(result -> LOGGER.info("PathFinder evasion completed: {} ({})",
                               result.status(), result.message()));
                           LOGGER.info("✓ PathFinder evasion started - navigating around obstacles");
@@ -1863,6 +1868,10 @@ public class BotEventHandler {
         actionInProgress.put(botName, true);
         currentAction.put(botName, actionName);
         actionStartTime.put(botName, System.currentTimeMillis());
+        if (bot != null && bot.getName().getString().equals(botName)
+                && (actionName.equals("ATTACK") || actionName.equals("SHOOT_ARROW") || actionName.equals("EVADE"))) {
+            NavigationService.suspend(bot.getUUID(), SuspensionReason.COMBAT);
+        }
         LOGGER.debug("[ACTION] Started: {}", actionName);
     }
 
@@ -1871,6 +1880,8 @@ public class BotEventHandler {
         String completedAction = currentAction.get(botName);
         currentAction.remove(botName);
         actionStartTime.remove(botName);
+        if (bot != null && bot.getName().getString().equals(botName))
+            NavigationService.resume(bot.getUUID(), SuspensionReason.COMBAT);
         if (completedAction != null) {
             LOGGER.debug("[ACTION] Completed: {}", completedAction);
         }

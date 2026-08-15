@@ -1,6 +1,7 @@
 package net.shasankp000.Commands;
 
 import com.mojang.brigadier.arguments.IntegerArgumentType;
+import com.mojang.brigadier.arguments.BoolArgumentType;
 import com.mojang.brigadier.arguments.StringArgumentType;
 import com.mojang.brigadier.context.CommandContext;
 import com.mojang.brigadier.exceptions.CommandSyntaxException;
@@ -37,6 +38,8 @@ import net.shasankp000.PathFinding.ChartPathToBlock;
 import net.shasankp000.PathFinding.GoTo;
 import net.shasankp000.PathFinding.NavigationOptions;
 import net.shasankp000.PathFinding.NavigationService;
+import net.shasankp000.PathFinding.NavigationDebugSnapshot;
+import net.shasankp000.PathFinding.SuspensionReason;
 import net.shasankp000.PathFinding.PathFinder;
 import net.shasankp000.PathFinding.PathTracer;
 import net.shasankp000.PathFinding.Segment;
@@ -145,6 +148,14 @@ public class modCommandRegistry {
                                                 )
                                         )
                                 )
+                        )
+                        .then(literal("navigation_debug")
+                                .then(Commands.argument("bot", EntityArgument.player())
+                                        .then(literal("status")
+                                                .executes(context -> navigationDebugStatus(context)))
+                                        .then(literal("particles")
+                                                .then(Commands.argument("enabled", BoolArgumentType.bool())
+                                                        .executes(context -> navigationDebugParticles(context)))))
                         )
                         // ----------------------------------------------------------------
                         // /bot stance <bot> <stay|follow|cancel> [targetPlayerName]
@@ -1337,9 +1348,11 @@ public class modCommandRegistry {
         else {
             String botName = bot.getName().tryCollapseToString();
 
+            NavigationService.suspend(bot.getUUID(), SuspensionReason.MANUAL_OVERRIDE);
             BlockPos currentPosition = bot.blockPosition();
             BlockPos newPosition = currentPosition.offset(1, 0, 0);
             bot.teleportTo(bot.level(), newPosition.getX(), newPosition.getY(), newPosition.getZ(), Set.of(), bot.getYRot(), bot.getXRot(), false);
+            NavigationService.resume(bot.getUUID(), SuspensionReason.MANUAL_OVERRIDE);
 
             LOGGER.info("Teleported {} 1 positive block ahead", botName);
 
@@ -1400,7 +1413,10 @@ public class modCommandRegistry {
 
             String botName = bot.getName().tryCollapseToString();
 
+            NavigationService.suspend(bot.getUUID(), SuspensionReason.MANUAL_OVERRIDE);
             bot.jumpFromGround();
+            UUID botId = bot.getUUID();
+            server.execute(() -> NavigationService.resume(botId, SuspensionReason.MANUAL_OVERRIDE));
 
             LOGGER.info("{} jumped!", botName);
 
@@ -1474,6 +1490,36 @@ public class modCommandRegistry {
                         ChatUtils.sendSystemMessage(context.getSource(), result.message())));
     }
 
+    private static int navigationDebugStatus(CommandContext<CommandSourceStack> context)
+            throws CommandSyntaxException {
+        ServerPlayer bot = EntityArgument.getPlayer(context, "bot");
+        NavigationDebugSnapshot status = NavigationService.debugSnapshot(bot);
+        String goals = status.requestedGoal() == null ? "none"
+                : status.requestedGoal() + " -> " + status.effectiveGoal() + " (" + status.disposition() + ")";
+        context.getSource().sendSystemMessage(Component.literal(
+                "Navigation " + status.phase() + " | goal " + goals
+                        + " | waypoint " + status.waypointIndex() + "/" + status.waypointCount()
+                        + " | suspended " + status.suspensions() + " | air " + status.air()));
+        context.getSource().sendSystemMessage(Component.literal(
+                "Recoveries " + status.recoveries() + " | penalties " + status.penalties()
+                        + " | replans " + status.totalReplans() + " (" + status.lastReplanReason() + ")"
+                        + " | search open/closed/expanded " + status.searchOpen() + "/"
+                        + status.searchClosed() + "/" + status.searchExpansions()
+                        + " | global budget " + status.globalPlanningBudget()));
+        return 1;
+    }
+
+    private static int navigationDebugParticles(CommandContext<CommandSourceStack> context)
+            throws CommandSyntaxException {
+        ServerPlayer bot = EntityArgument.getPlayer(context, "bot");
+        boolean enabled = BoolArgumentType.getBool(context, "enabled");
+        NavigationService.setParticleDebug(bot.getUUID(), enabled);
+        context.getSource().sendSystemMessage(Component.literal(
+                "Navigation route particles " + (enabled ? "enabled" : "disabled") + " for "
+                        + bot.getName().getString()));
+        return 1;
+    }
+
 
 
 
@@ -1481,6 +1527,7 @@ public class modCommandRegistry {
 
         if (source.getPlayer() != null) {
 
+            NavigationService.suspend(source.getPlayer().getUUID(), SuspensionReason.MANUAL_OVERRIDE);
             server.getCommands().performPrefixedCommand(source, "/player " + botName + " move forward");
 
         }
@@ -1503,6 +1550,7 @@ public class modCommandRegistry {
         if (source.getPlayer() != null) {
 
             server.getCommands().performPrefixedCommand(source, "/player " + botName + " stop");
+            NavigationService.resume(source.getPlayer().getUUID(), SuspensionReason.MANUAL_OVERRIDE);
 
         }
 

@@ -24,6 +24,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import net.shasankp000.DangerZoneDetector.DangerZoneDetector;
 import net.shasankp000.PathFinding.NavigationService;
+import net.shasankp000.PathFinding.SuspensionReason;
 
 import java.io.IOException;
 import java.util.Comparator;
@@ -257,6 +258,7 @@ public class AutoFaceEntity {
                 // ===== END PRIORITY: PROJECTILE DEFENSE =====
 
                 if (!hostileEntities.isEmpty()) {
+                    NavigationService.suspend(bot.getUUID(), SuspensionReason.THREAT);
                     botBusy = true;
 
                     // Report all hostile entities to debug manager
@@ -436,6 +438,7 @@ public class AutoFaceEntity {
 
                 }
                 else if ((DangerZoneDetector.detectDangerZone(bot, 10, 10 , 10) <= 5 && DangerZoneDetector.detectDangerZone(bot, 10, 10 , 10)!= 0) || hasSculkNearby)  {
+                    NavigationService.suspend(bot.getUUID(), SuspensionReason.THREAT);
 
                     System.out.println("Triggering handler for danger zone case");
                     isBotMoving = false;
@@ -515,6 +518,7 @@ public class AutoFaceEntity {
 
                 else {
                     // No hostile entities detected - bot is safe
+                    NavigationService.resume(bot.getUUID(), SuspensionReason.THREAT);
 
                     // Reset threat message flag when out of danger
                     threatMessageSent = false;
@@ -972,6 +976,7 @@ public class AutoFaceEntity {
     }
 
     public static void stopAutoFace(ServerPlayer bot) {
+        NavigationService.resume(bot.getUUID(), SuspensionReason.THREAT);
         ScheduledExecutorService executor = botExecutors.remove(bot);
         if (executor != null && !executor.isShutdown()) {
             executor.shutdownNow();
