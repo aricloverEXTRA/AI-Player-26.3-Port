@@ -27,6 +27,8 @@ import net.shasankp000.WorldUitls.isBlockItem;
 import net.shasankp000.GameAI.mood.MoodEngine;
 import net.shasankp000.GameAI.persona.PersonaRegistry;
 import net.shasankp000.GameAI.autonomous.NearbyBedSleepController;
+import net.shasankp000.PathFinding.NavigationOptions;
+import net.shasankp000.PathFinding.NavigationService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -1304,37 +1306,10 @@ public class BotEventHandler {
                             (int) Math.floor(targetVec.z)
                           );
 
-                          // Find path around obstacles
-                          net.minecraft.server.level.ServerLevel world = (net.minecraft.server.level.ServerLevel) bot.level();
-                          List<net.shasankp000.PathFinding.PathFinder.PathNode> path =
-                            net.shasankp000.PathFinding.PathFinder.calculatePath(bot.blockPosition(), targetPos, world);
-
-                          if (!path.isEmpty()) {
-                            LOGGER.info("✓ PathFinder found route with {} nodes - executing", path.size());
-
-                            // Simplify and convert to segments
-                            List<net.shasankp000.PathFinding.PathFinder.PathNode> simplified =
-                              net.shasankp000.PathFinding.PathFinder.simplifyPath(path, world);
-                            java.util.Queue<net.shasankp000.PathFinding.Segment> segments =
-                              net.shasankp000.PathFinding.PathFinder.convertPathToSegments(simplified, true); // Sprint!
-
-                            // Execute path with PathTracer
-                            net.shasankp000.PathFinding.PathTracer.BotSegmentManager manager =
-                              new net.shasankp000.PathFinding.PathTracer.BotSegmentManager(server, botSource, botName);
-                            segments.forEach(manager::addSegmentJob);
-                            manager.startProcessing();
-
-                            LOGGER.info("✓ PathFinder evasion started - navigating around obstacles");
-                          } else {
-                            // No path found - use direct evasion as fallback
-                            LOGGER.warn("⚠ PathFinder failed - using direct evasion fallback");
-                            if (closestThreat instanceof net.minecraft.world.entity.LivingEntity) {
-                              PredictiveThreatDetector.DrawingBowThreat threat =
-                                new PredictiveThreatDetector.DrawingBowThreat(
-                                  (net.minecraft.world.entity.LivingEntity) closestThreat, bot);
-                              AutoFaceEntity.executeAdaptivePanicEvasion(bot, threat, server);
-                            }
-                          }
+                          NavigationService.navigate(bot, targetPos, NavigationOptions.of(true))
+                            .thenAccept(result -> LOGGER.info("PathFinder evasion completed: {} ({})",
+                              result.status(), result.message()));
+                          LOGGER.info("✓ PathFinder evasion started - navigating around obstacles");
                         }
                       }
                     } else {

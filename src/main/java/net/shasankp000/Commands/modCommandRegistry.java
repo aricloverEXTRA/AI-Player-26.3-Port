@@ -35,6 +35,8 @@ import net.shasankp000.OllamaClient.ollamaClient;
 import net.shasankp000.PathFinding.BotStance;
 import net.shasankp000.PathFinding.ChartPathToBlock;
 import net.shasankp000.PathFinding.GoTo;
+import net.shasankp000.PathFinding.NavigationOptions;
+import net.shasankp000.PathFinding.NavigationService;
 import net.shasankp000.PathFinding.PathFinder;
 import net.shasankp000.PathFinding.PathTracer;
 import net.shasankp000.PathFinding.Segment;
@@ -490,7 +492,7 @@ public class modCommandRegistry {
                                             MinecraftServer server = bot.createCommandSourceStack().getServer();
                                             assert server != null;
                                             blockDetectionUnit.setIsBlockDetectionActive(false);
-                                            PathTracer.flushAllMovementTasks();
+                                            NavigationService.cancel(server, bot.getUUID(), "Autoface reset");
                                             AutoFaceEntity.setBotExecutingTask(false);
                                             AutoFaceEntity.isBotMoving = false;
 
@@ -1033,7 +1035,7 @@ public class modCommandRegistry {
 
                                     MinecraftServer server = context.getSource().getServer();
                                     CommandSourceStack serverSource = server.createCommandSourceStack();
-                                    PathTracer.flushAllMovementTasks();
+                                    NavigationService.cancelAll(server, "Administrative movement flush");
 
                                     ChatUtils.sendSystemMessage(serverSource, "Flushed all movement tasks");
 
@@ -1452,8 +1454,6 @@ public class modCommandRegistry {
         int y_distance = position.getY();
         int z_distance = position.getZ();
 
-        ServerLevel world = server.overworld();
-
         ServerPlayer bot = null;
         try {
             bot = EntityArgument.getPlayer(context, "bot");
@@ -1466,27 +1466,12 @@ public class modCommandRegistry {
             return;
         }
 
-        String botName = bot.getName().tryCollapseToString();
-        CommandSourceStack botSource = bot.createCommandSourceStack().withPermission(net.minecraft.server.permissions.PermissionSet.ALL_PERMISSIONS).withSuppressedOutput().withMaximumPermission(net.minecraft.server.permissions.PermissionSet.ALL_PERMISSIONS);
-
-        server.sendSystemMessage(Component.literal("Finding the shortest path to the target, please wait patiently if the game seems hung"));
-
-        ServerPlayer finalBot = bot;
-
-        server.execute(() -> {
-            List<PathFinder.PathNode> rawPath = PathFinder.calculatePath(finalBot.blockPosition(), new BlockPos(x_distance, y_distance, z_distance), world);
-
-            List<PathFinder.PathNode> finalPath = PathFinder.simplifyPath(rawPath, world);
-
-            LOGGER.info("Path output: {}", finalPath);
-
-            Queue<Segment> segments = convertPathToSegments(finalPath, sprint);
-
-            LOGGER.info("Generated segments: {}", segments);
-
-            PathTracer.tracePath(server, botSource, botName, segments, sprint);
-
-        });
+        server.sendSystemMessage(Component.literal("Planning a server-authoritative route to the target"));
+        boolean requestedSprint = sprint;
+        NavigationService.navigate(bot, new BlockPos(x_distance, y_distance, z_distance),
+                        NavigationOptions.of(requestedSprint))
+                .thenAccept(result -> server.execute(() ->
+                        ChatUtils.sendSystemMessage(context.getSource(), result.message())));
     }
 
 
