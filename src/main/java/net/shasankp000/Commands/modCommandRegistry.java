@@ -419,7 +419,7 @@ public class modCommandRegistry {
 
                                                     Vec3 aimPosition;
                                                     if (isMovingFast) {
-                                                        aimPosition = RangedWeaponUtils.calculateLeadPosition(target, projectileSpeed);
+                                                        aimPosition = RangedWeaponUtils.calculateLeadPosition(bot, target, projectileSpeed);
                                                         LOGGER.info("Applied lead compensation for fast-moving target");
                                                     } else {
                                                         aimPosition = target.position().add(0, target.getBbHeight() * 0.6, 0);
@@ -463,7 +463,7 @@ public class modCommandRegistry {
                                                         if (finalTarget.isAlive()) {
                                                             Vec3 finalAimPosition;
                                                             if (isMovingFast) {
-                                                                finalAimPosition = RangedWeaponUtils.calculateLeadPosition(finalTarget, finalProjectileSpeed);
+                                                                finalAimPosition = RangedWeaponUtils.calculateLeadPosition(bot, finalTarget, finalProjectileSpeed);
                                                             } else {
                                                                 finalAimPosition = finalTarget.position().add(0, finalTarget.getBbHeight() * 0.6, 0);
                                                             }
@@ -906,9 +906,9 @@ public class modCommandRegistry {
 
                                     ChatUtils.sendSystemMessage(serverSource, "Exporting Q-table to JSON. Please wait.... ");
 
-                                    QTableExporter.exportQTable(BotEventHandler.qTableDir + "/qtable.bin", BotEventHandler.qTableDir + "./fullQTable.json");
+                                    QTableExporter.exportQTable(BotEventHandler.qTableDir + "/qtable.bin", BotEventHandler.qTableDir + "/fullQTable.json");
 
-                                    ChatUtils.sendSystemMessage(serverSource, "Q-table has been successfully exported to a json file at: " + BotEventHandler.qTableDir + "./fullQTable.json" );
+                                    ChatUtils.sendSystemMessage(serverSource, "Q-table has been successfully exported to a json file at: " + BotEventHandler.qTableDir + "/fullQTable.json" );
 
                                     return 1;
                                 })
