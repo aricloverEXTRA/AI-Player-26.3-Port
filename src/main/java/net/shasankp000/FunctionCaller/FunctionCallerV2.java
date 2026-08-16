@@ -57,8 +57,7 @@ import net.shasankp000.Overlay.ThinkingStateManager;
 import net.shasankp000.PathFinding.ChartPathToBlock;
 
 import net.shasankp000.PathFinding.GoTo;
-
-import net.shasankp000.PathFinding.PathTracer;
+import net.shasankp000.PathFinding.NavigationService;
 
 import net.shasankp000.PlayerUtils.*;
 import net.shasankp000.FilingSystem.LLMClientFactory;
@@ -1364,7 +1363,9 @@ public class FunctionCallerV2 {
             }
         }
         blockDetectionUnit.setIsBlockDetectionActive(false);
-        PathTracer.flushAllMovementTasks();
+        if (botSource != null && botSource.getPlayer() != null) {
+            NavigationService.cancel(botSource.getServer(), botSource.getPlayer().getUUID(), "Function pipeline reset");
+        }
         AutoFaceEntity.setBotExecutingTask(false);
         AutoFaceEntity.isBotMoving = false;
         logger.info("✔️ Autoface module has been reset.");
@@ -1535,7 +1536,9 @@ public class FunctionCallerV2 {
             }
         }
         blockDetectionUnit.setIsBlockDetectionActive(false);
-        PathTracer.flushAllMovementTasks();
+        if (botSource != null && botSource.getPlayer() != null) {
+            NavigationService.cancel(botSource.getServer(), botSource.getPlayer().getUUID(), "Function pipeline reset");
+        }
         AutoFaceEntity.setBotExecutingTask(false);
         AutoFaceEntity.isBotMoving = false;
         logger.info("✔️ Autoface module has been reset.");

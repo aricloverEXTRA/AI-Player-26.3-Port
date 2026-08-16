@@ -12,6 +12,8 @@ import net.minecraft.world.entity.player.Inventory;
 import net.minecraft.world.food.FoodProperties;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.component.Consumable;
+import net.shasankp000.PathFinding.NavigationService;
+import net.shasankp000.PathFinding.SuspensionReason;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -136,6 +138,7 @@ public final class FoodConsumptionTool {
 
         UUID botId = bot.getUUID();
         if (PAUSE_STARTED_AT.putIfAbsent(botId, System.currentTimeMillis()) != null) return null;
+        NavigationService.suspend(botId, SuspensionReason.EATING);
 
         PausedActions pausedActions = pauseActions(bot);
         Inventory inventory = bot.getInventory();
@@ -274,6 +277,7 @@ public final class FoodConsumptionTool {
             TOTAL_PAUSED_MILLIS.merge(
                     botId, Math.max(0L, System.currentTimeMillis() - started), Long::sum);
         }
+        NavigationService.resume(botId, SuspensionReason.EATING);
     }
 
     private static <T> T callOnServer(MinecraftServer server, Callable<T> callable) throws Exception {
