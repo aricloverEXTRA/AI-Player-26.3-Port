@@ -1,6 +1,7 @@
 package net.shasankp000.PlayerUtils;
 
 import net.minecraft.block.BlockState;
+import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.item.ItemStack;
@@ -37,18 +38,27 @@ public class MiningTool {
                 ScheduledFuture<?> task = miningExecutor.scheduleAtFixedRate(() -> {
                     if (FoodConsumptionTool.isConsumptionInProgress(bot.getUuid())) return;
 
-                    BlockState currentState = bot.getWorld().getBlockState(targetBlockPos);
-
-                    if (currentState.isAir()) {
-                        System.out.println("✅ Mining complete!");
-                        miningResult.complete("Mining complete!");
+                    MinecraftServer server = bot.getServer();
+                    if (server == null) {
+                        miningResult.complete("⚠️ Server not found");
                         miningExecutor.shutdownNow();
                         return;
                     }
 
-                    bot.swingHand(bot.getActiveHand());
-                    bot.interactionManager.tryBreakBlock(targetBlockPos);
-                    System.out.println("⛏️ Mining...");
+                    server.execute(() -> {
+                        BlockState currentState = bot.getWorld().getBlockState(targetBlockPos);
+
+                        if (currentState.isAir()) {
+                            System.out.println("✅ Mining complete!");
+                            miningResult.complete("Mining complete!");
+                            miningExecutor.shutdownNow();
+                            return;
+                        }
+
+                        bot.swingHand(bot.getActiveHand());
+                        bot.interactionManager.tryBreakBlock(targetBlockPos);
+                        System.out.println("⛏️ Mining...");
+                    });
 
                 }, 0, ATTACK_INTERVAL_MS, TimeUnit.MILLISECONDS);
 

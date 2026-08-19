@@ -21,6 +21,7 @@ import net.shasankp000.GameAI.autonomous.AutonomousManager;
 import net.shasankp000.GameAI.autonomous.ServerChatEventBridge;
 import net.shasankp000.GameAI.handoff.ItemHandoffListener;
 import net.shasankp000.GameAI.handoff.TradeListener;
+import net.shasankp000.PathFinding.NavigationService;
 
 import net.shasankp000.Database.QTableStorage;
 import net.shasankp000.Entity.AutoFaceEntity;
@@ -128,6 +129,7 @@ public class AIPlayer implements ModInitializer {
 			configNetworkManager.registerServerCustomProviderSaveReceiver(server);
 			serverInstance = server;
 			LOGGER.info("Server instance stored!");
+			NavigationService.register();
 
 			System.out.println("Server instance is " + serverInstance);
 
@@ -154,6 +156,7 @@ public class AIPlayer implements ModInitializer {
 
 		ServerLifecycleEvents.SERVER_STOPPED.register(server -> {
 
+			NavigationService.cancelAll(server, "Server stopped");
 			FoodConsumptionTool.reset();
 
 			AutoFaceEntity.onServerStopped(server);

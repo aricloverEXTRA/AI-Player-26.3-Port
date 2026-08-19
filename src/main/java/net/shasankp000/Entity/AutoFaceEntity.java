@@ -451,22 +451,18 @@ public class AutoFaceEntity {
 
                     double distanceToHostileEntity = 0.0;
 
-                    try {
-
+                    if (hostileEntities != null && !hostileEntities.isEmpty()) {
                         // Find the closest hostile entity
                         Entity closestHostile = hostileEntities.stream()
                                 .min(Comparator.comparingDouble(e -> e.squaredDistanceTo(bot.getPos())))
-                                .orElseThrow(); // Use orElseThrow since empty case is already handled
+                                .orElse(null);
+                        if (closestHostile != null) {
+                            distanceToHostileEntity = Math.sqrt(closestHostile.squaredDistanceTo(bot.getPos()));
 
-                        distanceToHostileEntity = Math.sqrt(closestHostile.squaredDistanceTo(bot.getPos()));
-
-                        // Log details of the detected hostile entity
-                        System.out.println("Closest hostile entity: " + closestHostile.getName().getString()
-                                + " at distance: " + distanceToHostileEntity);
-
-                    } catch (Exception e) {
-                        System.out.println("An exception occurred while calculating detecting hostile entities nearby" + e.getMessage());
-                        System.out.println(e.getStackTrace());
+                            // Log details of the detected hostile entity
+                            System.out.println("Closest hostile entity: " + closestHostile.getName().getString()
+                                    + " at distance: " + distanceToHostileEntity);
+                        }
                     }
 
                     // first check if bot is moving, and if so, then stop moving.

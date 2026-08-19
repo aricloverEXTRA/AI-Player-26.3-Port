@@ -260,24 +260,17 @@ public class WebSearchTool {
                 "Return only one properly drafted query for the user prompt.\n";
 
 
-        List<Map<String, String>> queryConvo = new ArrayList<>();
-        Map<String, String> queryMap1 = new HashMap<>();
-
-        queryMap1.put("role", "system");
-        queryMap1.put("content", query_msg);
-
-        queryConvo.add(queryMap1);
         String response = "";
 
         if (client.isReachable()) {
-            response = client.sendPrompt(queryConvo.toString(), prompt);
+            response = client.sendPrompt(query_msg, prompt);
         }
         else {
             logger.warn("{} is not reachable at the moment, falling back to ollama client.", client.getProvider());
 
             try {
                 List<OllamaChatMessage> messages = new java.util.ArrayList<>();
-                messages.add(new OllamaChatMessage(OllamaChatMessageRole.SYSTEM, queryConvo.toString()));
+                messages.add(new OllamaChatMessage(OllamaChatMessageRole.SYSTEM, query_msg));
                 messages.add(new OllamaChatMessage(OllamaChatMessageRole.USER, prompt));
 
                 net.shasankp000.OllamaClient.OllamaThinkingResponse thinkingResponse =
