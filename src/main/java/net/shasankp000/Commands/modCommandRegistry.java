@@ -578,7 +578,10 @@ public class modCommandRegistry {
                                                                             int x = IntegerArgumentType.getInteger(context, "x");
                                                                             int y = IntegerArgumentType.getInteger(context, "y");
                                                                             int z = IntegerArgumentType.getInteger(context, "z");
-                                                                            MiningTool.mineBlock(bot, new BlockPos(x, y, z));
+                                                                            CommandSourceStack source = context.getSource();
+                                                                            MiningTool.mineBlock(bot, new BlockPos(x, y, z))
+                                                                                    .thenAccept(result -> ChatUtils.sendSystemMessage(
+                                                                                            source, result.functionMessage()));
 
                                                                             return 1;
                                                                         })

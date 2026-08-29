@@ -249,7 +249,8 @@ public final class FoodConsumptionTool {
         savedActions.copyFrom(liveActions);
         liveActions.stopAll();
         if (bot.isUsingItem()) bot.stopUsingItem();
-        return new PausedActions(savedActions, wasSprinting, wasSneaking);
+        return new PausedActions(savedActions, wasSprinting, wasSneaking,
+                MiningTool.isMining(bot.getUUID()));
     }
 
     private static void restoreSession(ConsumptionSession session) {
@@ -264,7 +265,13 @@ public final class FoodConsumptionTool {
                 && !session.bot.hasDisconnected()
                 && session.pausedActions != null
                 && session.bot instanceof ServerPlayerInterface playerInterface) {
-            playerInterface.getActionPack().copyFrom(session.pausedActions.actionPack);
+            EntityPlayerActionPack liveActions = playerInterface.getActionPack();
+            liveActions.copyFrom(session.pausedActions.actionPack);
+            if (session.pausedActions.miningWasActive) {
+                // Mining owns ATTACK and will re-establish it on its next server tick
+                // if the generation is still active. Never restore a stale attack.
+                liveActions.start(EntityPlayerActionPack.ActionType.ATTACK, null);
+            }
             session.bot.setShiftKeyDown(session.pausedActions.wasSneaking);
             session.bot.setSprinting(session.pausedActions.wasSprinting);
         }
@@ -345,7 +352,8 @@ public final class FoodConsumptionTool {
     private record PausedActions(
             EntityPlayerActionPack actionPack,
             boolean wasSprinting,
-            boolean wasSneaking
+            boolean wasSneaking,
+            boolean miningWasActive
     ) {}
 
     private record FoodCandidate(int slot, String itemId, int nutrition, float saturation) {
