@@ -81,8 +81,12 @@ class GenericOpenAIClientTest {
 
         JsonObject request = JsonParser.parseString(responsesRequestBody.get()).getAsJsonObject();
         assertEquals(model, request.get("model").getAsString());
-        assertEquals("system instructions", request.get("instructions").getAsString());
-        assertEquals("hello", request.get("input").getAsString());
+        JsonArray input = request.getAsJsonArray("input");
+        assertEquals(2, input.size());
+        assertEquals("system", input.get(0).getAsJsonObject().get("role").getAsString());
+        assertEquals("system instructions", input.get(0).getAsJsonObject().get("content").getAsString());
+        assertEquals("user", input.get(1).getAsJsonObject().get("role").getAsString());
+        assertEquals("hello", input.get(1).getAsJsonObject().get("content").getAsString());
         assertEquals(1024, request.get("max_output_tokens").getAsInt());
         assertFalse(request.get("store").getAsBoolean());
 

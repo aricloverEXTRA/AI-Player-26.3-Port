@@ -147,8 +147,14 @@ public class GenericOpenAIClient implements LLMClient {
     private JsonObject createResponsesRequest(String systemPrompt, String userPrompt) {
         JsonObject requestBody = new JsonObject();
         requestBody.addProperty("model", modelName);
-        requestBody.addProperty("instructions", systemPrompt);
-        requestBody.addProperty("input", userPrompt);
+
+        // Although OpenAI accepts a scalar input string, some compatible
+        // gateways (including LiteLLM ChatGPT routes) require a message list.
+        JsonArray input = new JsonArray();
+        input.add(createMessage("system", systemPrompt));
+        input.add(createMessage("user", userPrompt));
+
+        requestBody.add("input", input);
         requestBody.addProperty("max_output_tokens", MAX_OUTPUT_TOKENS);
         requestBody.addProperty("store", false);
         return requestBody;
