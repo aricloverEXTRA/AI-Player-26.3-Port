@@ -34,11 +34,13 @@ class GenericOpenAIClientTest {
         AtomicInteger chatRequests = new AtomicInteger();
         AtomicInteger responsesRequests = new AtomicInteger();
         AtomicReference<String> authorization = new AtomicReference<>();
+        AtomicReference<String> chatRequestBody = new AtomicReference<>();
 
         server = newServer();
         server.createContext("/v1/chat/completions", exchange -> {
             chatRequests.incrementAndGet();
             authorization.set(exchange.getRequestHeaders().getFirst("Authorization"));
+            chatRequestBody.set(readBody(exchange));
             respond(exchange, 200, """
                     {"choices":[{"message":{"content":"chat reply"}}]}
                     """);
@@ -55,6 +57,8 @@ class GenericOpenAIClientTest {
         assertEquals(1, chatRequests.get());
         assertEquals(0, responsesRequests.get());
         assertEquals("Bearer secret", authorization.get());
+        assertFalse(JsonParser.parseString(chatRequestBody.get())
+                .getAsJsonObject().get("stream").getAsBoolean());
     }
 
     @Test
@@ -89,6 +93,7 @@ class GenericOpenAIClientTest {
         assertEquals("hello", input.get(1).getAsJsonObject().get("content").getAsString());
         assertEquals(1024, request.get("max_output_tokens").getAsInt());
         assertFalse(request.get("store").getAsBoolean());
+        assertFalse(request.get("stream").getAsBoolean());
 
         GenericOpenAIClient secondClient = new GenericOpenAIClient("secret", model, baseUrl());
         assertEquals("responses reply", secondClient.sendPrompt("system instructions", "again"));
@@ -155,6 +160,62 @@ class GenericOpenAIClientTest {
         assertEquals(0, chatRequests.get());
         assertEquals(1, responsesRequests.get());
         assertEquals(2, modelRequests.get());
+    }
+
+    @Test
+    void parsesResponsesEventStreamWhenGatewayStreamsAnyway() throws Exception {
+        server = newServer();
+        server.createContext("/v1/responses", exchange -> respond(
+                exchange,
+                200,
+                """
+                        event: response.output_text.delta
+                        data: {"type":"response.output_text.delta","delta":"Hello"}
+
+                        event: response.output_text.delta
+                        data: {"type":"response.output_text.delta","delta":" world"}
+
+                        data: [DONE]
+
+                        """,
+                "text/event-stream"));
+        server.start();
+
+        GenericOpenAIClient client = new GenericOpenAIClient(
+                "secret", "streaming-responses-model", baseUrl() + "/responses");
+
+        assertEquals("Hello world", client.sendPrompt("system", "hello"));
+    }
+
+    @Test
+    void extractsTextFromCompletedEventAfterLifecycleEvents() throws Exception {
+        JsonObject completedEvent = new JsonObject();
+        completedEvent.addProperty("type", "response.completed");
+        completedEvent.add("response", JsonParser.parseString(responsesBody("completed reply")));
+
+        server = newServer();
+        server.createContext("/v1/responses", exchange -> respond(
+                exchange,
+                200,
+                """
+                        data: {"type":"response.created","response":{"output":[]}}
+
+                        data: {"type":"response.in_progress","response":{"output":[]}}
+
+                        data: {"type":"response.output_item.added","item":{"type":"message","content":[]}}
+
+                        data: %s
+
+                        data: [DONE]
+
+                        """.formatted(completedEvent),
+                "text/event-stream"));
+        server.start();
+
+        GenericOpenAIClient client = new GenericOpenAIClient(
+                "secret", "completed-event-model", baseUrl() + "/responses");
+
+        assertEquals("completed reply", client.sendPrompt("system", "hello"));
     }
 
     @Test
@@ -243,8 +304,13 @@ class GenericOpenAIClientTest {
     }
 
     private static void respond(HttpExchange exchange, int statusCode, String body) throws IOException {
+        respond(exchange, statusCode, body, "application/json");
+    }
+
+    private static void respond(HttpExchange exchange, int statusCode, String body, String contentType)
+            throws IOException {
         byte[] bytes = body.getBytes(StandardCharsets.UTF_8);
-        exchange.getResponseHeaders().set("Content-Type", "application/json");
+        exchange.getResponseHeaders().set("Content-Type", contentType);
         exchange.sendResponseHeaders(statusCode, bytes.length);
         try (exchange; var responseBody = exchange.getResponseBody()) {
             responseBody.write(bytes);

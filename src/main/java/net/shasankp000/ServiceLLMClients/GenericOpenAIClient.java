@@ -141,6 +141,7 @@ public class GenericOpenAIClient implements LLMClient {
 
         requestBody.add("messages", messages);
         requestBody.addProperty("max_tokens", MAX_OUTPUT_TOKENS);
+        requestBody.addProperty("stream", false);
         return requestBody;
     }
 
@@ -157,6 +158,7 @@ public class GenericOpenAIClient implements LLMClient {
         requestBody.add("input", input);
         requestBody.addProperty("max_output_tokens", MAX_OUTPUT_TOKENS);
         requestBody.addProperty("store", false);
+        requestBody.addProperty("stream", false);
         return requestBody;
     }
 
@@ -192,6 +194,11 @@ public class GenericOpenAIClient implements LLMClient {
 
     private static String extractResponseText(ApiEndpoint endpoint, String rawResponseBody) {
         try {
+            String trimmedBody = rawResponseBody.trim();
+            if (trimmedBody.startsWith("data:") || trimmedBody.startsWith("event:")) {
+                return extractEventStreamText(endpoint, rawResponseBody);
+            }
+
             JsonElement parsed = JsonParser.parseString(rawResponseBody);
             if (!parsed.isJsonObject()) {
                 return "Error: Provider returned an invalid JSON response.";
@@ -206,6 +213,95 @@ public class GenericOpenAIClient implements LLMClient {
             LOGGER.warn("Could not parse OpenAI-compatible response: {}", rawResponseBody, e);
             return "Error: Could not parse provider response.";
         }
+    }
+
+    private static String extractEventStreamText(ApiEndpoint endpoint, String rawResponseBody) {
+        StringBuilder deltas = new StringBuilder();
+        String completedText = "";
+
+        for (String line : rawResponseBody.split("\\R")) {
+            String trimmedLine = line.trim();
+            if (!trimmedLine.startsWith("data:")) {
+                continue;
+            }
+
+            String data = trimmedLine.substring("data:".length()).trim();
+            if (data.isEmpty() || data.equals("[DONE]")) {
+                continue;
+            }
+
+            try {
+                JsonElement parsedEvent = JsonParser.parseString(data);
+                if (!parsedEvent.isJsonObject()) {
+                    continue;
+                }
+
+                JsonObject event = parsedEvent.getAsJsonObject();
+                String eventType = readStringField(event, "type");
+                if (eventType.endsWith(".delta")) {
+                    appendText(deltas, readStringField(event, "delta"));
+                    continue;
+                }
+                if (eventType.endsWith(".done")) {
+                    String doneText = readStringField(event, "text");
+                    if (!doneText.isEmpty()) {
+                        completedText = doneText;
+                    }
+                    continue;
+                }
+
+                JsonArray choices = getArray(event, "choices");
+                if (choices != null) {
+                    for (JsonElement choiceElement : choices) {
+                        if (!choiceElement.isJsonObject()) {
+                            continue;
+                        }
+                        JsonObject choice = choiceElement.getAsJsonObject();
+                        JsonObject delta = getObject(choice, "delta");
+                        appendText(deltas, readContentField(delta, "content"));
+                    }
+                    continue;
+                }
+
+                JsonObject eventResponse = getObject(event, "response");
+                if (eventResponse != null) {
+                    // Lifecycle events such as response.created and
+                    // response.in_progress do not contain generated text.
+                    if (eventType.equals("response.completed")) {
+                        String extracted = extractResponsesText(eventResponse, data);
+                        if (!extracted.startsWith("Error:")) {
+                            completedText = extracted;
+                        }
+                    }
+                    continue;
+                }
+
+                // Other typed lifecycle events (output_item.added,
+                // content_part.added, etc.) carry metadata rather than text.
+                if (!eventType.isEmpty()) {
+                    continue;
+                }
+
+                String extracted = endpoint == ApiEndpoint.RESPONSES
+                        ? extractResponsesText(event, data)
+                        : extractChatCompletionsText(event, data);
+                if (!extracted.startsWith("Error:")) {
+                    completedText = extracted;
+                }
+            } catch (Exception e) {
+                LOGGER.debug("Ignoring malformed event-stream data: {}", data, e);
+            }
+        }
+
+        if (!deltas.isEmpty()) {
+            return deltas.toString();
+        }
+        if (!completedText.isEmpty()) {
+            return completedText;
+        }
+
+        LOGGER.warn("Provider returned an event stream without text output");
+        return "Error: Provider returned an empty event stream.";
     }
 
     private static String extractResponsesText(JsonObject jsonResponse, String rawResponseBody) {
